@@ -9,9 +9,8 @@ import os
 import argparse
 import time
 from typing import List
-from hf_ehr.scripts.create_vocab.utils import add_unique_codes, add_description_to_codes
 from hf_ehr.data.datasets import FEMRDataset, MEDSDataset
-from hf_ehr.tokenizers.utils import call_func_with_logging, load_tokenizer_config_and_metadata_from_path
+from hf_ehr.tokenizers.utils import call_func_with_logging, load_tokenizer_config_and_metadata_from_path, add_unique_codes, add_description_to_codes
 from hf_ehr.utils import get_dataset_info_from_config_yaml, get_tokenizer_info_from_config_yaml
 
 DEFAULT_PATH_TO_CACHE_DIR: str = '/share/pi/nigam/mwornow/hf_ehr/cache/create_desc/'
