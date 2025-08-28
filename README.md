@@ -4,6 +4,13 @@ This repo contains code and pretrained models for the [**Context Clues paper**](
 
 It currently supports EHR data defined using the [**MEDS data standard**](https://github.com/Medical-Event-Data-Standard/) or [**FEMR package**](https://github.com/som-shahlab/femr).
 
+**🆕 Recent Updates (2025-08-28):**
+- ✅ Full BF16 support for all 7 model architectures
+- ✅ Simplified Based model (no custom library needed)
+- ✅ Fixed Llama model to work without Meta's gated repo
+- ✅ Removed all Stanford internal references
+- ✅ Single GPU training optimization
+
 ### 📖 Table of Contents
 
 1. 🤗 [Pretrained HuggingFace Models](#models)
@@ -114,7 +121,7 @@ conda create -n hf_env python=3.10 -y
 conda activate hf_env
 pip install -e . --no-cache-dir
 
-# [Optional] If you haven't already created your **Tokenizers**, run the following. If you're on Carina, then skip this step.
+# [Optional] If you haven't already created your **Tokenizers**, run the following. 
 python3 hf_ehr/tokenizers/create_clmbr.py # Takes ~5 seconds
 python3 hf_ehr/tokenizers/create_desc.py # Takes ~30 min
 python3 hf_ehr/tokenizers/create_cookbook.py # Takes many hours
@@ -122,42 +129,98 @@ python3 hf_ehr/tokenizers/create_cookbook.py # Takes many hours
 
 <a name="quick_start"/>
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Single GPU Only)
 
-Launch a GPT training run with the ability to configure common hyperparameters (using `main.py`)
+**Note:** This fork has been simplified for single CUDA GPU training only. Ensure you have an NVIDIA GPU with CUDA support.
+
+**Update (2025-08-28):** All Stanford internal references (Carina system, /share/pi/nigam paths) have been removed. The codebase now uses environment variables and local paths for better portability.
+
+### Basic Training Run
 
 ```bash
-cd hf_ehr/scripts/carina
-python3 main.py --model gpt2 --size base --tokenizer clmbr --context_length 512 --dataloader approx --dataset v8 --trainer single_gpu --is_run_local --is_skip_base --extra "callbacks.model_checkpointing.save_most_recent_every_n_train_steps=10"
-```
+# Navigate to project root
+cd /home/natthawut/hf_ehr
 
-Launch a Llama run on a MEDS dataset with more customization over configs (using `run.py`):
-```bash
-cd hf_ehr/scripts/carina
-python3 run.py \
-    +data=meds_mimic4_demo \
+# Run training with Hydra configs
+python -m hf_ehr.scripts.run \
+    +model=gpt2-base \
+    +data=synthea_omop \
+    +tokenizer=cookbook_synthea \
     +trainer=single_gpu \
-    +model=llama-base \
-    +tokenizer=clmbr \
-    data.dataloader.mode=approx \
-    data.dataloader.approx_batch_sampler.max_tokens=16384
+    data.dataloader.max_length=512 \
+    trainer.max_epochs=10 \
+    data.dataloader.batch_size=8 \
+    logging.wandb.entity=your-entity \
+    logging.wandb.project=hf-ehr-training \
+    main.path_to_output_dir=./outputs/my-run
 ```
 
-To launch 4 GPT-base runs on one SLURM node (in parallel), and 4 Mamba runs on another SLURM node (in parallel):
+### Quick Test Run
+
+For testing the setup with minimal resources:
 
 ```bash
-cd hf_ehr/scripts/carina
+python -m hf_ehr.scripts.run \
+    +model=gpt2-debug \
+    +data=synthea_omop \
+    +tokenizer=cookbook_synthea \
+    +trainer=single_gpu \
+    data.dataloader.max_length=256 \
+    trainer.max_epochs=1 \
+    trainer.limit_train_batches=5 \
+    trainer.limit_val_batches=1 \
+    data.dataloader.batch_size=2
+```
 
-# GPT runs
-sbatch parallel_gpt.sh
+### Training with BF16 Precision
 
-# Mamba runs
-sbatch parallel_mamba.sh
+All models now have full BF16 support with automatic detection and improved stability:
+
+```bash
+python -m hf_ehr.scripts.run \
+    +model=mamba-tiny \
+    +data=synthea_omop \
+    +tokenizer=cookbook_synthea \
+    +trainer=single_gpu \
+    data.dataloader.max_length=1024 \
+    data.dataloader.batch_size=4 \
+    trainer.max_epochs=5 \
+    trainer.accumulate_grad_batches=4 \
+    logging.wandb.entity=your-entity \
+    logging.wandb.project=hf-ehr-training
+```
+
+**BF16 Features:**
+- ✅ **All 7 model architectures supported**: GPT, BERT, Llama, Mamba, Hyena, T5, Based
+- ✅ **Automatic detection**: Enables BF16 on GPUs with compute capability ≥ 8.0
+- ✅ **Better stability**: BF16 has same exponent range as FP32, preventing NaN losses
+- ✅ **No external dependencies**: Works out-of-the-box (Flash Attention 2 optional)
+- ✅ **Tested on L40S**: All models successfully trained with BF16 enabled
+
+### Prerequisites
+
+1. Create tokenizer first (if not already done):
+```bash
+python hf_ehr/tokenizers/create_cookbook.py \
+    --path_to_dataset_config hf_ehr/configs/data/synthea_omop.yaml \
+    --path_to_tokenizer_config hf_ehr/configs/tokenizer/cookbook_synthea.yaml
+```
+
+2. Ensure CUDA is available:
+```bash
+python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available!'"
 ```
 
 <a name="training" />
 
 ## 🏋️‍♀️ Training
+
+**Important Note:** This fork has been simplified to focus exclusively on single CUDA GPU training. Distributed training, MPS, and CPU support have been removed for improved stability and maintainability.
+
+### System Requirements
+- NVIDIA GPU with CUDA support (L40s, H100, A100, etc.)
+- CUDA toolkit 11.8+
+- Sufficient GPU memory for your model size
 
 We use [Hydra](https://github.com/facebookresearch/hydra) to manage our configurations and [PyTorch Lightning](https://github.com/Lightning-AI/pytorch-lightning) for training. 
 
@@ -167,46 +230,11 @@ There are 3 ways to launch a training run.
 
 ### Easy Mode
 
-Launch multiple runs in parallel on the same SLURM node  (each job gets 1 GPU) using `hf_ehr/scripts/carina/parallel_{model}.sh`:
-
-```bash
-cd hf_ehr/scripts/carina
-
-# Launch 4 gpt runs in parallel on the same node. See the file for the specific model versions run.
-sbatch parallel_gpt.sh
-
-# Launch 4 bert runs in parallel on the same node. See the file for the specific model versions run.
-sbatch parallel_bert.sh
-
-# Launch 4 hyena runs in parallel on the same node. See the file for the specific model versions run.
-sbatch parallel_hyena.sh
-
-# Launch 4 mamba runs in parallel on the same node. See the file for the specific model versions run.
-sbatch parallel_mamba.sh
-```
+Launch training runs using the provided configuration files.
 
 ### Medium Mode
 
-Launch one run on a SLURM node using `hf_ehr/scripts/carina/{model}.sh`:
-
-```bash
-cd hf_ehr/scripts/carina
-
-# Launch GPT-2 base model on v8 dataset with CLMBRTokenizer, ApproxBatchSampler dataloader, and 2048 context length; force train from scratch and not resume prior run (even if exists)
-python3 main.py --model gpt2 --size base --tokenizer clmbr --context_length 2048 --dataloader approx --dataset v8 --is_force_refresh
-
-# Launch Mamba tiny model on v8 dataset with CookbookTokenizer, ApproxBatchSampler dataloader, and 16384 context length; resume prior run if exists
-python3 main.py --model mamba --size tiny --tokenizer cookbook --context_length 16384 --dataloader approx --dataset v8
-
-# Launch BERT-base model on v8 dataset with DescTokenizer, ApproxBatchSampler dataloader, and 4096 context length; resume prior run if exists; overwrite the default device assignment to GPU 1; give wandb run a name of `custom`
-python3 main.py --model bert --size base --tokenizer desc --context_length 4096 --dataloader approx --dataset v8 --extra "+trainer.devices=[1] logging.wandb.name=custom"
-
-# Run locally a GPT-2 large model on v8 AllTokens dataset with CLMBRTokenizer, ApproxBatchSampler dataloader, and 1024 context length
-python3 main.py --model gpt2 --size large --tokenizer clmbr --context_length 2048 --dataloader approx --dataset v8-alltokens --is_run_local
-
-# Launch Mamba tiny model on v8 dataset with CookbookTokenizer, ApproxBatchSampler dataloader, and 16384 context length; resume prior run if exists; run on 8 H100's
-python3 main.py --model mamba --size tiny --tokenizer cookbook --context_length 16384 --dataloader approx --dataset v8 --partitions nigam-h100 --extra "trainer=multi_gpu trainer.devices=[0,1,2,3,4,5,6,7]"
-```
+Launch a training run using the provided configuration files.
 
 General usage:
 ```bash
@@ -233,9 +261,8 @@ Directly call `run.py`, which allows maximum flexibility for configs.
 See the [Config README](hf_ehr/configs/README.md) for details on all config settings.
 
 ```bash
-cd hf_ehr/scripts/carina
 
-# Launch gpt with: size=base, dataset=v8, context_length=2048, tokenizer=CLMBRTokenizer, sampler=ApproxBatchSampler, max_tokens_per_batch=16384, use_cuda_devices=2,3, wandb_logging_name=gpt2-custom-run, force_restart_existing_run=True, save_to_path=/share/pi/nigam/mwornow/hf_ehr/cache/runs/bert-test/
+# Launch gpt with: size=base, dataset=v8, context_length=2048, tokenizer=CLMBRTokenizer, sampler=ApproxBatchSampler, max_tokens_per_batch=16384, use_cuda_devices=2,3, wandb_logging_name=gpt2-custom-run, force_restart_existing_run=True, save_to_path=./outputs/runs/bert-test/
 python3 ../run.py \
     +data=v8 \
     +trainer=single_gpu \
@@ -248,7 +275,7 @@ python3 ../run.py \
     trainer.devices=[2,3] \
     logging.wandb.name=gpt2-custom-run \
     main.is_force_restart=True \
-    main.path_to_output_dir=/share/pi/nigam/mwornow/hf_ehr/cache/runs/bert-test/
+    main.path_to_output_dir=./outputs/runs/bert-test/
 ```
 
 ### How to Configure Runs
@@ -269,11 +296,10 @@ This all occurs within the `hf_ehr` repo.
 
 1. Identify the path (`<path_to_ckpt>`) to the model checkpoint you want to evaluate.
 
-2. Generate patient representations with your model. This will create a folder in `/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/models` for this model checkpoint.
+2. Generate patient representations with your model. This will create a folder in `./outputs/ehrshot/models` for this model checkpoint.
 
 ```bash
 cd hf_ehr/scripts/eval/
-sbatch ehrshot.sh <path_to_ckpt>
 ```
 
 #### 2. Generate EHRSHOT Results
@@ -346,7 +372,7 @@ python split_meds_dataset.py --path_to_meds_reader $PATH_TO_MEDS_READER --train_
 
 ```bash
 cp hf_ehr/configs/data/meds_mimic4_demo.yaml hf_ehr/configs/data/meds_mimic4_demo_custom.yaml
-sed -i 's|/share/pi/nigam/mwornow/mimic-iv-demo-meds-reader|$PATH_TO_MEDS_READER|g' hf_ehr/configs/data/meds_mimic4_demo_custom.yaml
+sed -i 's|$MEDS_READER_DIR|$PATH_TO_MEDS_READER|g' hf_ehr/configs/data/meds_mimic4_demo_custom.yaml
 ```
 
 7. **Train** a tokenizer on the dataset. Limit our vocabulary to the top-$k$ most frequently occurring codes.
@@ -358,11 +384,9 @@ python create_cookbook_k.py --dataset meds_mimic4_demo --k 32 --stat count_occur
 ```
 
 8. **Train** a **Llama model** on the dataset.
-- You need to exchange line 315 in `scripts/carina/main.py`, with your desired output dir.
 - By default, this uses WandB to track the run, please configure it beforehand by calling `wandb init` and then changing `scripts/run.py` at line 294 (and possibly elsewhere) entity and project.
 
 ```bash
-cd hf_ehr/scripts/carina
 python3 main.py --model llama --size base --tokenizer clmbr --context_length 1024 --dataloader approx --dataset meds_mimic4_demo_custom --is_run_local --is_force_refresh
 ``` 
 
@@ -410,7 +434,6 @@ python3 hf_ehr/tokenizers/create_cookbook_k.py --path_to_tokenizer_config hf_ehr
 6. **Train** a **Llama model** on the dataset using 2 GPUs. *Note: This takes ~5 hrs per epoch with 2 H100's.*
 
 ```bash
-cd hf_ehr/scripts/carina
 python3 main.py --model llama --size base --tokenizer clmbr --context_length 512 --dataloader batch --dataset truven --trainer multi_gpu_2 --is_run_local --is_force_refresh
 ``` 
 
@@ -484,35 +507,8 @@ When using the `pip install mamba-ssm causal-conv1d` packages for accelerated Ma
 
 ## ℹ️ Other
 
-### Based
-To get the **based** model to run, you need to do the following installations on an A100 or above node:
-
-```bash
-pip install -v \
-    --disable-pip-version-check \
-    --no-cache-dir \
-    --no-build-isolation \
-    --config-settings "--build-option=--cpp_ext" \
-    --config-settings "--build-option=--cuda_ext" \
-    'git+https://github.com/NVIDIA/apex@b496d85'  --no-cache-dir
-
-pip install --no-cache-dir \
-    torch==2.1.2 \
-    torchvision==0.16.2 \
-    torchaudio==2.1.2 \
-    --index-url https://download.pytorch.org/whl/cu118 --no-cache-dir
-
-# Install FLA triton kernel
-pip install -U git+https://github.com/sustcsonglin/flash-linear-attention
-
-pip install 'git+https://github.com/HazyResearch/flash-attention@v2.5.2' --no-build-isolation --no-cache-dir
-pip install 'git+https://github.com/HazyResearch/flash-attention@v2.5.2#subdirectory=csrc/fused_dense_lib'  --no-build-isolation --no-cache-dir
-pip install 'git+https://github.com/HazyResearch/flash-attention@v2.5.2#subdirectory=csrc/layer_norm' --no-build-isolation --no-cache-dir
-
-git clone git@github.com:HazyResearch/based.git
-cd based
-pip install -e . --no-cache-dir
-```
+### Based Model
+The **Based** model has been simplified to use standard GPT2 architecture and no longer requires the custom `based` library installation. It works out-of-the-box with the standard installation and automatically uses BF16 precision on compatible GPUs.
 
 ### 🤖 Creating a Model
 

@@ -159,17 +159,17 @@ def main():
     print(f"Running with n_procs={args.n_procs}, chunk_size={chunk_size}")
 
     # With `n_procs=5`, should take ~25 mins
-    call_func_with_logging(add_unique_codes, 'add_unique_codes', path_to_tokenizer_config, pids=pids, path_to_cache_dir=path_to_cache_dir, n_procs=args.n_procs, chunk_size=chunk_size, path_to_extract=path_to_extract, dataset_cls=dataset_cls)
+    call_func_with_logging(add_unique_codes, 'add_unique_codes', path_to_tokenizer_config, pids=pids, path_to_cache_dir=args.path_to_cache_dir, n_procs=args.n_procs, chunk_size=chunk_size, path_to_extract=path_to_extract, dataset_cls=dataset_cls)
     tokenizer_config, _ = load_tokenizer_config_and_metadata_from_path(path_to_tokenizer_config)
     check_add_unique_codes(tokenizer_config)
     
     # With `n_procs=5`, should take ~XXXX mins
-    call_func_with_logging(add_categorical_codes, 'add_categorical_codes', path_to_tokenizer_config, pids=pids, n_procs=args.n_procs, path_to_cache_dir=path_to_cache_dir, path_to_extract=path_to_extract, dataset_cls=dataset_cls)
+    call_func_with_logging(add_categorical_codes, 'add_categorical_codes', path_to_tokenizer_config, pids=pids, n_procs=args.n_procs, path_to_cache_dir=args.path_to_cache_dir, path_to_extract=path_to_extract, dataset_cls=dataset_cls)
     tokenizer_config, _ = load_tokenizer_config_and_metadata_from_path(path_to_tokenizer_config)
     check_add_categorical_codes(tokenizer_config)
     
     # With `n_procs=5`, should take ~XXXX mins
-    call_func_with_logging(add_numerical_range_codes, 'add_numerical_range_codes', path_to_tokenizer_config, pids=pids, N=n_buckets_for_numerical_range_codes, path_to_cache_dir=path_to_cache_dir, path_to_extract=path_to_extract, dataset_cls=dataset_cls, n_procs=args.n_procs)
+    call_func_with_logging(add_numerical_range_codes, 'add_numerical_range_codes', path_to_tokenizer_config, pids=pids, N=n_buckets_for_numerical_range_codes, path_to_cache_dir=args.path_to_cache_dir, path_to_extract=path_to_extract, dataset_cls=dataset_cls, n_procs=args.n_procs)
     tokenizer_config, _ = load_tokenizer_config_and_metadata_from_path(path_to_tokenizer_config)
     check_add_numerical_range_codes(tokenizer_config)
     
@@ -179,12 +179,14 @@ def main():
     check_remove_codes_belonging_to_vocabs(tokenizer_config, excluded_vocabs)
     
     # With `n_procs=5`, should take ~XXXX mins
-    call_func_with_logging(add_occurrence_count_to_codes, 'add_occurrence_count_to_codes', path_to_tokenizer_config, pids=pids, path_to_cache_dir=path_to_cache_dir, dataset=args.dataset, split='train', n_procs=args.n_procs, chunk_size=chunk_size, path_to_extract=path_to_extract, dataset_cls=dataset_cls)
+    # Extract dataset name from path or use a default
+    dataset_name = path_to_extract.split('/')[-1] if '/' in path_to_extract else 'synthea'
+    call_func_with_logging(add_occurrence_count_to_codes, 'add_occurrence_count_to_codes', path_to_tokenizer_config, pids=pids, path_to_cache_dir=args.path_to_cache_dir, dataset=dataset_name, split='train', n_procs=args.n_procs, chunk_size=chunk_size, path_to_extract=path_to_extract, dataset_cls=dataset_cls)
     tokenizer_config, _ = load_tokenizer_config_and_metadata_from_path(path_to_tokenizer_config)
     check_add_occurrence_count_to_codes(tokenizer_config)
     
     # Dataset-specific ETLs
-    if args.dataset == 'meds_dev':
+    if dataset_name == 'meds_dev':
         # Do some code adjustments specific to meds_dev
         meds_dev_etl(path_to_tokenizer_config)
     

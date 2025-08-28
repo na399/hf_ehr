@@ -12,7 +12,7 @@ from hf_ehr.config import (
     save_tokenizer_config_to_path,
 )
 
-DEFAULT_PATH_TO_CLMBR_v8_JSON: str = '/share/pi/nigam/mwornow/hf_ehr/cache/tokenizers/clmbr_v8/clmbr_v8_original_dictionary.json'
+DEFAULT_PATH_TO_CLMBR_v8_JSON: str = './cache/tokenizers/clmbr_v8/clmbr_v8_original_dictionary.json'
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser('Create CookbookTokenizer for a dataset')

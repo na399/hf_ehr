@@ -87,10 +87,17 @@ def convert_omop_to_meds(
         True if conversion successful
     """
     # Check if output already exists
-    if output_dir.exists() and not force:
-        logger.warning(f"MEDS output directory already exists: {output_dir}")
-        logger.warning("Use --force to overwrite")
-        return False
+    if output_dir.exists():
+        # Check if directory is empty
+        if any(output_dir.iterdir()):
+            # Directory has contents
+            if not force:
+                logger.warning(f"MEDS output directory already exists with data: {output_dir}")
+                logger.warning("Use --force to overwrite")
+                return False
+        else:
+            # Directory is empty, proceed without force
+            logger.info(f"Using existing empty directory: {output_dir}")
     
     # Auto-detect optimal workers if not specified
     if num_workers is None:
@@ -106,8 +113,8 @@ def convert_omop_to_meds(
     logger.info(f"Input: {input_dir}")
     logger.info(f"Output: {output_dir}")
     
-    # Remove existing output if force
-    if output_dir.exists() and force:
+    # Remove existing output if force and directory has contents
+    if output_dir.exists() and force and any(output_dir.iterdir()):
         logger.info(f"Removing existing output directory: {output_dir}")
         subprocess.run(['rm', '-rf', str(output_dir)], check=False)
     
@@ -160,10 +167,17 @@ def convert_meds_to_reader(
         True if conversion successful
     """
     # Check if output already exists
-    if reader_dir.exists() and not force:
-        logger.warning(f"MEDS Reader directory already exists: {reader_dir}")
-        logger.warning("Use --force to overwrite")
-        return False
+    if reader_dir.exists():
+        # Check if directory is empty
+        if any(reader_dir.iterdir()):
+            # Directory has contents
+            if not force:
+                logger.warning(f"MEDS Reader directory already exists with data: {reader_dir}")
+                logger.warning("Use --force to overwrite")
+                return False
+        else:
+            # Directory is empty, proceed without force
+            logger.info(f"Using existing empty directory: {reader_dir}")
     
     # Auto-detect optimal workers if not specified
     if num_workers is None:
@@ -173,8 +187,8 @@ def convert_meds_to_reader(
     logger.info(f"Input: {meds_dir}")
     logger.info(f"Output: {reader_dir}")
     
-    # Remove existing output if force
-    if reader_dir.exists() and force:
+    # Remove existing output if force and directory has contents
+    if reader_dir.exists() and force and any(reader_dir.iterdir()):
         logger.info(f"Removing existing output directory: {reader_dir}")
         subprocess.run(['rm', '-rf', str(reader_dir)], check=False)
     

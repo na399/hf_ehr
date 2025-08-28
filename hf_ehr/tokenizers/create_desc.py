@@ -13,7 +13,7 @@ from hf_ehr.data.datasets import FEMRDataset, MEDSDataset
 from hf_ehr.tokenizers.utils import call_func_with_logging, load_tokenizer_config_and_metadata_from_path, add_unique_codes, add_description_to_codes
 from hf_ehr.utils import get_dataset_info_from_config_yaml, get_tokenizer_info_from_config_yaml
 
-DEFAULT_PATH_TO_CACHE_DIR: str = '/share/pi/nigam/mwornow/hf_ehr/cache/create_desc/'
+DEFAULT_PATH_TO_CACHE_DIR: str = './cache/create_desc/'
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser('Create DescEmb tokenizer config')

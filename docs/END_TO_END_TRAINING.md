@@ -2,15 +2,35 @@
 
 ## Overview
 
-This guide provides comprehensive instructions for training EHR foundation models on OMOP CDM v5.4 data using the HF-EHR framework. The system supports both NVIDIA GPUs (L40s) and Apple Silicon (M3 Pro) with automatic device detection.
+This guide provides comprehensive instructions for training EHR foundation models on OMOP CDM v5.4 data using the HF-EHR framework. 
+
+**Important:** This version has been simplified to focus exclusively on single CUDA GPU training for improved stability and performance. Distributed training, MPS (Apple Silicon), and CPU support have been removed.
 
 ## Table of Contents
 
 1. [Environment Setup](#environment-setup)
 2. [Data Preparation](#data-preparation)
-3. [Model Training](#model-training)
-4. [Model Prioritization](#model-prioritization)
-5. [Troubleshooting](#troubleshooting)
+3. [Tokenizer Creation](#tokenizer-creation)
+4. [Model Training](#model-training)
+5. [Model Prioritization](#model-prioritization)
+6. [Troubleshooting](#troubleshooting)
+
+## Complete Workflow
+
+```bash
+# Step 1: Setup environment
+uv venv && source .venv/bin/activate
+uv pip install -e .
+
+# Step 2: Convert OMOP to MEDS
+python scripts/convert_omop_to_meds.py
+
+# Step 3: Create tokenizer
+python scripts/create_tokenizers.py --type clmbr
+
+# Step 4: Train model
+python scripts/train_local.py --model gpt2 --size base
+```
 
 ---
 
@@ -23,11 +43,12 @@ This guide provides comprehensive instructions for training EHR foundation model
 git clone <repo-url>
 cd hf_ehr
 
-# Install package in development mode
-pip install -e .
+# Create virtual env
+uv venv
+source .venv/bin/activate
 
-# Install MEDS packages (if not already installed)
-pip install meds_reader meds_etl
+# Install package in development mode
+uv pip install -e .
 ```
 
 ### 2. Configure Environment
@@ -52,11 +73,8 @@ OMOP_DATA_DIR=./data/Synthea27NjParquet
 MEDS_DATA_DIR=./data/synthea_meds
 MEDS_READER_DIR=./data/synthea_meds_reader
 
-# Device configuration (auto-detects by default)
-FORCE_DEVICE=auto  # Options: auto, cuda, mps, cpu
-
-# For L40s users
-CUDA_VISIBLE_DEVICES=0
+# Device configuration (CUDA only)
+CUDA_VISIBLE_DEVICES=0  # Select GPU device ID
 
 # Logging
 WANDB_PROJECT=hf-ehr-training
@@ -75,7 +93,9 @@ python scripts/test_e2e.py
 Expected output:
 ```
 ✓ PyTorch version: 2.5.1
-✓ Device type: mps (or cuda for L40s)
+✓ Device type: cuda
+✓ CUDA available: True
+✓ GPU: NVIDIA L40s (or your GPU model)
 ✓ Synthea Data: PASSED
 ✓ Model Loading: PASSED
 ✓ ALL TESTS PASSED!
@@ -131,17 +151,174 @@ data/
 
 ---
 
+## Tokenizer Creation
+
+### Overview
+
+Before training models, you need to create a tokenizer that converts clinical codes and events into tokens. HF-EHR supports three tokenizer types:
+
+1. **CLMBRTokenizer** - Fast, uses pre-defined vocabulary from CLMBR papers (~5 seconds)
+2. **DescTokenizer** - Description-based embeddings, more semantic (~30 minutes)
+3. **CookbookTokenizer** - Custom tokenizer with numerical binning (~10 minutes)
+
+### Quick Start
+
+Create the default CLMBR tokenizer (recommended for beginners):
+
+```bash
+# Quick tokenizer creation
+python scripts/create_tokenizers.py --type clmbr
+
+# Or create all tokenizers
+python scripts/create_tokenizers.py --type all
+```
+
+### Detailed Tokenizer Creation
+
+#### 1. CLMBRTokenizer (Recommended)
+
+The fastest tokenizer, uses a pre-defined vocabulary from the CLMBR/MOTOR/EHRSHOT papers:
+
+```bash
+# Basic creation
+python scripts/create_tokenizers.py --type clmbr
+
+# With vocabulary size limit (in thousands)
+python scripts/create_tokenizers.py --type clmbr --vocab-size 8
+
+# Direct creation (advanced)
+python hf_ehr/tokenizers/create_clmbr.py \
+  --path_to_tokenizer_config hf_ehr/configs/tokenizer/clmbr.yaml
+```
+
+**Pros:** Fast creation, well-tested, good baseline performance
+**Cons:** Fixed vocabulary, may miss dataset-specific codes
+
+#### 2. DescTokenizer
+
+Creates embeddings based on code descriptions:
+
+```bash
+# Basic creation
+python scripts/create_tokenizers.py --type desc
+
+# With more workers for faster processing
+python scripts/create_tokenizers.py --type desc --n-procs 10
+
+# Direct creation (advanced)
+python hf_ehr/tokenizers/create_desc.py \
+  --path_to_dataset_config hf_ehr/configs/data/synthea_omop.yaml \
+  --path_to_tokenizer_config hf_ehr/configs/tokenizer/desc.yaml \
+  --n_procs 10
+```
+
+**Pros:** Semantic understanding, better for rare codes
+**Cons:** Slower creation, requires code descriptions
+
+#### 3. CookbookTokenizer
+
+Custom tokenizer with numerical binning for lab values:
+
+```bash
+# Basic creation
+python scripts/create_tokenizers.py --type cookbook
+
+# With custom binning
+python scripts/create_tokenizers.py --type cookbook --n-buckets 5
+
+# Direct creation (advanced)
+python hf_ehr/tokenizers/create_cookbook.py \
+  --path_to_dataset_config hf_ehr/configs/data/synthea_omop.yaml \
+  --path_to_tokenizer_config hf_ehr/configs/tokenizer/cookbook.yaml \
+  --n_buckets_for_numerical_range_codes 10 \
+  --n_procs 10
+```
+
+**Pros:** Handles numerical values well, customizable
+**Cons:** Slowest creation, may overfit to training data
+
+### Tokenizer Storage
+
+Tokenizers are stored in:
+```
+cache/tokenizers/
+├── clmbr_synthea/
+│   ├── tokenizer_config.json
+│   └── vocab.json
+├── desc_synthea/
+│   └── ...
+└── cookbook_synthea/
+    └── ...
+```
+
+### Verifying Tokenizer Creation
+
+Check if your tokenizer was created successfully:
+
+```bash
+# List available tokenizers
+ls -la cache/tokenizers/
+
+# Check tokenizer config
+python -c "
+import json
+with open('cache/tokenizers/clmbr_synthea/tokenizer_config.json') as f:
+    config = json.load(f)
+    print(f'Tokenizer has {len(config[\"tokens\"])} tokens')
+"
+```
+
+### Performance Considerations
+
+| Tokenizer | Creation Time | Memory Usage | Recommended For |
+|-----------|--------------|--------------|-----------------|
+| CLMBR | ~5 seconds | Low | Quick experiments, baseline |
+| Desc | ~30 minutes | Medium | Production models |
+| Cookbook | ~10 minutes | High | Custom domains, lab-heavy data |
+
+### Troubleshooting Tokenizer Creation
+
+#### Out of Memory
+Reduce the number of processes:
+```bash
+python scripts/create_tokenizers.py --type cookbook --n-procs 2
+```
+
+#### Missing Dependencies
+Install required packages:
+```bash
+uv pip install meds-reader transformers
+```
+
+#### HuggingFace Authentication (for CLMBR)
+The CLMBR tokenizer downloads from HuggingFace. If needed:
+```bash
+huggingface-cli login
+```
+
+---
+
 ## Model Training
+
+### Prerequisites
+
+Before training, ensure you have:
+1. ✅ Converted OMOP data to MEDS format (see [Data Preparation](#data-preparation))
+2. ✅ Created a tokenizer (see [Tokenizer Creation](#tokenizer-creation))
 
 ### Quick Start
 
 Train a model with automatic configuration:
 
 ```bash
+# First create tokenizer (if not done)
+python scripts/create_tokenizers.py --type clmbr
+
 # Train GPT-2 base model
 python scripts/train_local.py \
   --model gpt2 \
   --size base \
+  --tokenizer clmbr_synthea \
   --context-length 512 \
   --epochs 10
 
@@ -166,7 +343,7 @@ python scripts/train_local.py \
 python scripts/train_local.py \
   --model llama \              # Model architecture
   --size base \                # Model size
-  --tokenizer clmbr \          # Tokenizer choice
+  --tokenizer clmbr_synthea \  # Tokenizer choice
   --context-length 2048 \      # Sequence length
   --batch-size auto \          # Auto-detect optimal batch size
   --epochs 20 \                # Number of epochs
@@ -175,19 +352,30 @@ python scripts/train_local.py \
   --force-refresh              # Start training from scratch
 ```
 
-### Device-Specific Configurations
+### GPU Memory Guidelines
 
-The system automatically detects and optimizes for your device:
+Recommended batch sizes by GPU memory:
 
-#### L40s (48GB VRAM) - CUDA
-- Larger batch sizes (32-64 for base models)
-- BF16 mixed precision
-- More dataloader workers (8)
+#### High-End GPUs (40GB+ VRAM)
+**Examples:** L40s (48GB), A100 (40/80GB), H100 (80GB)
+- Batch sizes: 32-64 for base models
+- BF16 mixed precision (automatic)
+- 8 dataloader workers
+- Context length: Up to 4096
 
-#### M3 Pro (36GB Unified) - MPS
-- Smaller batch sizes (8-16 for base models)
-- FP16 mixed precision
-- Fewer dataloader workers (4)
+#### Mid-Range GPUs (24GB VRAM)
+**Examples:** RTX 4090, RTX 3090, A10
+- Batch sizes: 16-32 for base models  
+- Mixed precision enabled
+- 4 dataloader workers
+- Context length: Up to 2048
+
+#### Entry GPUs (16GB VRAM)
+**Examples:** V100, T4, RTX 4070 Ti
+- Batch sizes: 4-8 for base models
+- Use gradient accumulation
+- 2 dataloader workers
+- Context length: 512-1024
 
 ---
 
@@ -287,12 +475,16 @@ Or use gradient accumulation:
 accumulate_grad_batches: 8
 ```
 
-#### MPS Fallback Errors
+#### CUDA Not Available
 
-Some operations may not be supported on MPS. Force CPU if needed:
+Ensure CUDA is properly installed:
 ```bash
-export FORCE_DEVICE=cpu
-python scripts/train_local.py
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+If False, reinstall PyTorch with CUDA support:
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu118
 ```
 
 #### MEDS Conversion Fails
@@ -311,20 +503,23 @@ Required tables:
 
 ### Performance Tips
 
-#### For L40s (CUDA)
-- Use larger batch sizes: `--batch-size 32`
-- Enable BF16 (automatic)
-- Use multiple workers in dataloader
-
-#### For M3 Pro (MPS)
-- Use smaller batch sizes: `--batch-size 8`
+#### Memory Optimization
+- Monitor GPU memory: `nvidia-smi -l 1`
 - Use gradient accumulation for effective larger batches
-- Monitor unified memory usage
+- Enable mixed precision (automatic with CUDA)
+- Clear cache between epochs if needed
 
-#### General
+#### Speed Optimization  
+- Use larger batch sizes when memory allows
+- Pin memory for faster data transfer (`pin_memory: true`)
+- Adjust number of dataloader workers based on CPU cores
+- Use torch.compile() for PyTorch 2.0+ (experimental)
+
+#### Debugging
 - Start with shorter sequences: `--context-length 512`
 - Use debug mode for testing: `--debug`
-- Profile memory usage: Check `nvidia-smi` or Activity Monitor
+- Set `CUDA_LAUNCH_BLOCKING=1` for better error messages
+- Use `torch.cuda.empty_cache()` to free memory
 
 ---
 
@@ -357,13 +552,29 @@ For issues or questions:
 - Run tests: `python scripts/test_e2e.py`
 - Review configs: `hf_ehr/configs/`
 
-## Summary of Changes Made
+## Summary of Configuration
 
-1. **Device Detection**: Automatic CUDA/MPS/CPU detection with fallbacks
-2. **Environment Config**: Replaced 87 hard-coded paths with environment variables
-3. **OMOP→MEDS Pipeline**: Complete conversion toolchain for OMOP CDM v5.4
-4. **Model Configs**: Prioritized Mamba > Llama > GPT > Hyena
-5. **Training Scripts**: Unified interface for all platforms
-6. **Documentation**: Comprehensive guides for setup and training
+### Simplified Architecture
+This version has been streamlined for single CUDA GPU training:
 
-The system is now ready for end-to-end training on both L40s (CUDA) and M3 Pro (MPS) devices!
+1. **Single GPU Focus**: All distributed training code removed for improved stability
+2. **CUDA Only**: Exclusively supports NVIDIA GPUs with CUDA
+3. **Fixed Issues**: Resolved tokenizer special tokens and interval calculation bugs
+4. **Optimized Settings**: Pre-configured for single GPU performance
+5. **Clean Codebase**: Removed complexity from multi-device support
+
+### Key Features
+- ✅ OMOP CDM v5.4 → MEDS conversion pipeline
+- ✅ Three tokenizer types (CLMBR, Desc, Cookbook)
+- ✅ Support for GPT-2, Llama, Mamba, Hyena architectures
+- ✅ Automatic mixed precision training
+- ✅ WandB integration for experiment tracking
+- ✅ Checkpoint saving and resumption
+
+### System Requirements
+- NVIDIA GPU with CUDA support
+- CUDA toolkit 11.8 or higher
+- PyTorch 2.0+ with CUDA support
+- Sufficient GPU memory for chosen model size
+
+The system is optimized for high-performance single GPU training on NVIDIA hardware!

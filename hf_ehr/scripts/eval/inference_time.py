@@ -118,22 +118,22 @@ def main():
     args = parse_args()
     # Define your list of checkpoint paths here
     checkpoint_paths = [
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/gpt-base-512--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/gpt-base-1024--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/gpt-base-2048--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/gpt-base-4096--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/llama-base-512--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/llama-base-1024--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/llama-base-2048--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/llama-base-4096--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/mamba-tiny-1024--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/mamba-tiny-4096--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/mamba-tiny-8192--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/mamba-tiny-16384--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/hyena-large-1024--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/hyena-large-4096--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/hyena-large-8192--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
-        '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/hyena-large-16384--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/gpt-base-512--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/gpt-base-1024--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/gpt-base-2048--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/gpt-base-4096--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/llama-base-512--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/llama-base-1024--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/llama-base-2048--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/llama-base-4096--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/mamba-tiny-1024--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/mamba-tiny-4096--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/mamba-tiny-8192--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/mamba-tiny-16384--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/hyena-large-1024--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/hyena-large-4096--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/hyena-large-8192--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
+        './data/suhana/hf_ehr/cache/runs_backup/hyena-large-16384--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt',
     ]
 
     # Define the output CSV file path

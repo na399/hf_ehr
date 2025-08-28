@@ -63,7 +63,7 @@ python3 create_cookbook_k.py --dataset v8 --k 10 --stat count_occurrences
 
 ## File Structure
 
-All tokenizers will get written to `/share/pi/nigam/mwornow/hf_ehr/cache/tokenizers`. 
+All tokenizers will get written to `./cache/tokenizers`. 
 
 The folder structure is as follows:
 
