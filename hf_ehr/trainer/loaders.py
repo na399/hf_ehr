@@ -23,7 +23,8 @@ def load_dataloaders(config: DictConfig,
     mlm_prob: float = config.data.mlm_prob if is_mlm else 0.0
     n_workers: int = config.data.dataloader.n_workers
     seed: int = config.main.seed
-    n_replicas: int = len(config.trainer.devices)
+    # Single GPU only - no replicas
+    n_replicas: int = 1
     
     # Samplers
     if dataloader_mode == 'approx':
@@ -54,7 +55,7 @@ def load_dataloaders(config: DictConfig,
         else:
             raise ValueError(f"Unknown dataset_name: {dataset_name}")
 
-        # For Multi-GPU training, need to do this to first determine # of sequences in each batch so that we can evenly distribute batches across GPUs
+        # Single GPU training - create samplers with n_replicas=1, rank=0
         train_sort_sampler = SortishSampler(train_idx_to_seq_length, train_bucket_size, is_random_shuffle_across_buckets=is_random_shuffle_across_buckets, is_random_shuffle_within_buckets=is_random_shuffle_within_buckets, secondary_sort_key=secondary_sort_key, n_replicas=1, rank=0)
         train_batch_sampler = ApproxBatchSampler( train_idx_to_seq_length, train_sort_sampler, max_length, batch_max_tokens, )
         _ = len(train_batch_sampler)
@@ -70,16 +71,16 @@ def load_dataloaders(config: DictConfig,
 
         # Train -- randomize (if desired) within/across batch sequence ordering
         print('=>', len(train_n_samples_per_batch), len(val_n_samples_per_batch), len(test_n_samples_per_batch))
-        train_sort_sampler = SortishSampler(train_idx_to_seq_length, train_bucket_size, is_random_shuffle_across_buckets=is_random_shuffle_across_buckets, is_random_shuffle_within_buckets=is_random_shuffle_within_buckets, secondary_sort_key=secondary_sort_key, n_samples_per_batch=train_n_samples_per_batch, n_replicas=n_replicas)
+        train_sort_sampler = SortishSampler(train_idx_to_seq_length, train_bucket_size, is_random_shuffle_across_buckets=is_random_shuffle_across_buckets, is_random_shuffle_within_buckets=is_random_shuffle_within_buckets, secondary_sort_key=secondary_sort_key, n_samples_per_batch=train_n_samples_per_batch, n_replicas=1)
         train_batch_sampler = ApproxBatchSampler( train_idx_to_seq_length, train_sort_sampler, max_length, batch_max_tokens, )
         train_batch_sampler_kwargs = { 'batch_sampler' : train_batch_sampler, }
         # For val / test -- always sort by length, then execute in fixed sequence
         ## Val
-        val_sort_sampler = SortishSampler( val_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_samples_per_batch=val_n_samples_per_batch, n_replicas=n_replicas)
+        val_sort_sampler = SortishSampler( val_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_samples_per_batch=val_n_samples_per_batch, n_replicas=1)
         val_batch_sampler = ApproxBatchSampler( val_idx_to_seq_length, val_sort_sampler, max_length, batch_max_tokens, )
         val_batch_sampler_kwargs = { 'batch_sampler' : val_batch_sampler, }
         ## Test
-        test_sort_sampler = SortishSampler( test_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_samples_per_batch=test_n_samples_per_batch, n_replicas=n_replicas)
+        test_sort_sampler = SortishSampler( test_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_samples_per_batch=test_n_samples_per_batch, n_replicas=1)
         test_batch_sampler = ApproxBatchSampler( test_idx_to_seq_length, test_sort_sampler, max_length, batch_max_tokens, )
         test_batch_sampler_kwargs = { 'batch_sampler' : test_batch_sampler, }
     else:

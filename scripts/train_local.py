@@ -46,9 +46,9 @@ def main():
     parser.add_argument(
         '--tokenizer',
         type=str,
-        default='clmbr',
-        choices=['clmbr', 'desc', 'cookbook'],
-        help='Tokenizer to use'
+        default='clmbr_synthea',
+        choices=['clmbr_synthea', 'desc_synthea', 'cookbook_synthea'],
+        help='Tokenizer to use (must be created first with create_tokenizers.py)'
     )
     parser.add_argument(
         '--context-length',
@@ -135,7 +135,7 @@ def main():
     # Build hydra command
     cmd = [
         sys.executable,
-        str(Path(__file__).parent / 'run.py'),
+        str(Path(__file__).parent.parent / 'hf_ehr' / 'scripts' / 'run.py'),
         f'+data={args.data}',
         f'+trainer={trainer_config}',
         f'+model={model_name}',

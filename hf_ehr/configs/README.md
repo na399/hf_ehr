@@ -12,7 +12,7 @@ Default settings for all Hydra configs. Anything in this file can be overridden 
 
 * `main`
     * `seed`: int *= 1* -- Random seed for training
-    * `path_to_output_dir`: str *= /share/pi/nigam/mwornow/hf_ehr/cache/runs/${now:%Y-%m-%d_%H-%M-%S}/* -- Path to the directory where the outputs will be saved
+    * `path_to_output_dir`: str *= ./cache/runs/${now:%Y-%m-%d_%H-%M-%S}/* -- Path to the directory where the outputs will be saved
     * `is_force_restart`: bool *= False* -- If True, delete existing checkpoint and restart from scratch
 * `hydra`
     * `run`
@@ -32,7 +32,7 @@ Default settings for all Hydra configs. Anything in this file can be overridden 
 * `data`
     * `dataset`
         * `name`: str *=FEMRDataset* -- Name of class of dataset from [hf_ehr/data/datasets.py](../data/datasets.py) that this dataset is initialized from
-        * `path_to_femr_extract`: str *=/share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes* -- Path to FEMR extract
+        * `path_to_femr_extract`: str *=./data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes* -- Path to FEMR extract
         * `is_debug`: bool *= False*-- If True, use a small subset of the data for debugging
     * `dataloader`
         * `mode`: str *= approx* -- To avoid changing the config file for each run, specify the mode and keep both batch_size and approx_batch_sampler

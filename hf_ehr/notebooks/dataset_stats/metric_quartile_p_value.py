@@ -15,16 +15,16 @@ dtypes = {
 }
 
 # Set up file paths
-file_512 = '/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/metrics__gpt2-base-512--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv'
-file_4096 = '/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/metrics__gpt2-base-4096--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv'
+file_512 = './ehrshot-benchmark/ehrshot/stratify/metrics__gpt2-base-512--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv'
+file_4096 = './ehrshot-benchmark/ehrshot/stratify/metrics__gpt2-base-4096--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv'
 
 # GPT
-#/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/metrics__hyena-large-1024--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv
-#/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/metrics__hyena-large-16384--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv
+#./ehrshot-benchmark/ehrshot/stratify/metrics__hyena-large-1024--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv
+#./ehrshot-benchmark/ehrshot/stratify/metrics__hyena-large-16384--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv
 
 #Llama 
-#'/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/metrics__llama-base-4096--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv'
-#'/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/metrics__llama-base-512--clmbr_train-tokens-total_nonPAD-ckpt_val=1000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv'
+#'./ehrshot-benchmark/ehrshot/stratify/metrics__llama-base-4096--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv'
+#'./ehrshot-benchmark/ehrshot/stratify/metrics__llama-base-512--clmbr_train-tokens-total_nonPAD-ckpt_val=1000000000-persist_chunk:last_embed:last__per_patient__all_tasks.csv'
 
 # Initialize dictionaries to store sampled dataframes for each metric
 df_4096_brier = {}

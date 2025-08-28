@@ -264,10 +264,10 @@ if __name__ == '__main__':
     from hf_ehr.data.tokenization import CLMBRTokenizer, DescTokenizer
     import time
     
-    PATH_TO_CACHE_DIR: str = '/share/pi/nigam/mwornow/hf_ehr/cache/'
+    PATH_TO_CACHE_DIR: str = './cache/'
     # Datasets
-    PATH_TO_FEMR_EXTRACT_v8 = '/share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
-    PATH_TO_FEMR_EXTRACT_MIMIC4 = '/share/pi/nigam/data/femr_mimic_4_extract'
+    PATH_TO_FEMR_EXTRACT_v8 = './data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
+    PATH_TO_FEMR_EXTRACT_MIMIC4 = './data/femr_mimic_4_extract'
     # Tokenizers
     PATH_TO_TOKENIZERS_DIR: str = os.path.join(PATH_TO_CACHE_DIR, 'tokenizers/')
     PATH_TO_TOKENIZER_CLMBR_v8_DIR: str = os.path.join(PATH_TO_TOKENIZERS_DIR, 'clmbr_v8/')

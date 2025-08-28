@@ -7,7 +7,7 @@ import datetime
 import lightning.pytorch as pl
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger, MLFlowLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, Callback
-from lightning.pytorch.utilities import rank_zero_only
+# Removed distributed training imports - single GPU only
 
 from loguru import logger
 from torch.utils.data import DataLoader
@@ -23,9 +23,8 @@ from hf_ehr.models.mamba import MambaLanguageModel
 from hf_ehr.models.llama import LlamaLanguageModel
 from hf_ehr.models.t5 import T5LanguageModel
 from hf_ehr.trainer.loaders import load_datasets, load_dataloaders
-from hf_ehr.config import rewrite_paths_for_carina_from_config
 from hf_ehr.logger.reloggers import WandbRelogger
-import torch.distributed as dist
+# Removed distributed imports - single GPU only
 
 try:
     from hf_ehr.models.based import BasedLanguageModel
@@ -141,10 +140,7 @@ def train_token_metric_func(val: int, last_val: Optional[int], config) -> Tuple[
 
 @hydra.main(version_base=None, config_path='../configs/', config_name="config")
 def main(config: DictConfig) -> None:
-    # Rewrite paths for /local-scratch on certain partitions
-    if config.main.is_carina:
-        config = rewrite_paths_for_carina_from_config(config)
-
+    # Configuration loading
     if 'trainer' in config and 'accumulate_grad_batches' in config.trainer:
         if config.trainer.accumulate_grad_batches == "__PLACEHOLDER__":
             try:
@@ -175,8 +171,7 @@ def main(config: DictConfig) -> None:
     # Check if resuming from checkpoint
     is_resume_from_ckpt: bool = os.path.exists(os.path.join(path_to_output_dir, 'ckpts/last.ckpt'))
     path_to_resume_ckpt: Optional[str] = os.path.join(path_to_output_dir, 'ckpts/last.ckpt') if is_resume_from_ckpt else None
-    if rank_zero_only.rank == 0:
-        if is_force_restart:
+    if is_force_restart:
             print("====================================")
             print("====================================")
             print("!!!! Force restart !!!!")
@@ -189,8 +184,8 @@ def main(config: DictConfig) -> None:
                 shutil.rmtree(path_to_output_dir)
 
     # Paths 
-    path_to_log_dir: str = os.path.join(path_to_output_dir, f'logs/' if rank_zero_only.rank == 0 else f'logs-{rank_zero_only.rank}/')
-    path_to_ckpt_dir: str = os.path.join(path_to_output_dir, f'ckpts/' if rank_zero_only.rank == 0 else f'ckpts-{rank_zero_only.rank}/')
+    path_to_log_dir: str = os.path.join(path_to_output_dir, 'logs/')
+    path_to_ckpt_dir: str = os.path.join(path_to_output_dir, 'ckpts/')
     path_to_artifacts_dir: str = os.path.join(path_to_log_dir, f'artifacts/')
     path_to_log_file: str = os.path.join(path_to_log_dir, 'info.log')
     os.makedirs(path_to_output_dir, exist_ok=True)
@@ -229,44 +224,41 @@ def main(config: DictConfig) -> None:
                                     save_dir=f"{path_to_log_dir}",
                                     tracking_uri=f"file:{path_to_log_dir}") 
             ]
-            if rank_zero_only.rank == 0:
-                # Save mlflow run ID
-                mlflow_run_id: str = loggers[-1].run_id
-                with open(os.path.join(path_to_log_dir, 'mlflow_run_id.txt'), 'w') as f:
-                    f.write(mlflow_run_id)
-        if rank_zero_only.rank == 0:
-            if not is_resume_from_ckpt:
-                mlflow_config = OmegaConf.to_container(config, resolve=True)
-                mlflow_config.pop('config', None)
-                loggers[-1].log_hyperparams(mlflow_config)
+            # Save mlflow run ID
+            mlflow_run_id: str = loggers[-1].run_id
+            with open(os.path.join(path_to_log_dir, 'mlflow_run_id.txt'), 'w') as f:
+                f.write(mlflow_run_id)
+        if not is_resume_from_ckpt:
+            mlflow_config = OmegaConf.to_container(config, resolve=True)
+            mlflow_config.pop('config', None)
+            loggers[-1].log_hyperparams(mlflow_config)
 
     ## Wandb
     # NOTE: There's a lot of `init()` calls below. Idk why they are all necessary, but they seem to be. Don't remove any!
     run = None
     if is_wandb:
         if is_resume_from_ckpt:
-            # Load existing wandb run ID -- make sure we pull from the official `/logs/` directory rather than a GPU-specific version (`/logs-{rank}/`) if using DDP
-            with open(os.path.join(path_to_log_dir.replace(f'logs-{rank_zero_only.rank}', 'logs'), 'wandb_run_id.txt'), 'r') as f:
+            # Load existing wandb run ID
+            with open(os.path.join(path_to_log_dir, 'wandb_run_id.txt'), 'r') as f:
                 wandb_run_id: str = f.read()
                 
             logger.info(f"Found existing wandb run: `{wandb_run_id}`")
 
-            if rank_zero_only.rank == 0:
-                if config.logging.wandb.is_force_create_wandb_run_from_scratch:
-                    logger.critical(f"Creating new wandb run from scratch")
-                    run = wandb.init(
-                        entity=config.logging.wandb.entity,
-                        project=config.logging.wandb.project, 
-                        dir=path_to_log_dir, 
-                        name=config.logging.wandb.name,
-                        resume='never',
-                    )
-                    wandb_run_id = run.id
-                else:
-                    wandb_relogger = WandbRelogger(config.logging.wandb.project, config.logging.wandb.entity)
-                    run = wandb_relogger.relog_metrics(path_to_resume_ckpt, path_to_log_dir)
-                    wandb_run_id = run.id
-                    logger.critical(f"Restarting wandb run from prior run with id=`{wandb_run_id}`")
+            if config.logging.wandb.is_force_create_wandb_run_from_scratch:
+                logger.critical(f"Creating new wandb run from scratch")
+                run = wandb.init(
+                    entity=config.logging.wandb.entity,
+                    project=config.logging.wandb.project, 
+                    dir=path_to_log_dir, 
+                    name=config.logging.wandb.name,
+                    resume='never',
+                )
+                wandb_run_id = run.id
+            else:
+                wandb_relogger = WandbRelogger(config.logging.wandb.project, config.logging.wandb.entity)
+                run = wandb_relogger.relog_metrics(path_to_resume_ckpt, path_to_log_dir)
+                wandb_run_id = run.id
+                logger.critical(f"Restarting wandb run from prior run with id=`{wandb_run_id}`")
             
             loggers += [ 
                 WandbLogger(project=config.logging.wandb.project,
@@ -276,30 +268,27 @@ def main(config: DictConfig) -> None:
                             id=wandb_run_id)
             ]
         else:
-            if rank_zero_only.rank == 0:
-                run = wandb.init(
-                    entity=config.logging.wandb.entity,
-                    project=config.logging.wandb.project, 
-                    dir=path_to_log_dir, 
-                    name=config.logging.wandb.name
-                )
+            run = wandb.init(
+                entity=config.logging.wandb.entity,
+                project=config.logging.wandb.project, 
+                dir=path_to_log_dir, 
+                name=config.logging.wandb.name
+            )
             loggers += [ 
                 WandbLogger(project=config.logging.wandb.project,
                             log_model=False,
                             save_dir=path_to_log_dir,
                             name=config.logging.wandb.name)
             ]
-            if rank_zero_only.rank == 0:
-                # Save wandb run ID
-                wandb_run_id: str = run.id
-                with open(os.path.join(path_to_log_dir, 'wandb_run_id.txt'), 'w') as f:
-                    f.write(wandb_run_id)
-        if rank_zero_only.rank == 0:
-            if not is_resume_from_ckpt:
-                wandb_config = OmegaConf.to_container(config, resolve=True)
-                run.config.update(wandb_config)
-            run.define_metric('train/loss', summary='min')
-            run.define_metric('val/loss', summary='min')
+            # Save wandb run ID
+            wandb_run_id: str = run.id
+            with open(os.path.join(path_to_log_dir, 'wandb_run_id.txt'), 'w') as f:
+                f.write(wandb_run_id)
+        if not is_resume_from_ckpt:
+            wandb_config = OmegaConf.to_container(config, resolve=True)
+            run.config.update(wandb_config)
+        run.define_metric('train/loss', summary='min')
+        run.define_metric('val/loss', summary='min')
 
     logger.critical("========================== Starting main ==========================")
     logger.critical(f">>>> RESUMING from CHECKPOINT | Wandb run ID: {wandb_run_id} | Loading from: `{path_to_resume_ckpt}` <<<<" if is_resume_from_ckpt else f">>>> Training from SCRATCH | Saving to: `{path_to_output_dir}` <<<<")
@@ -429,25 +418,25 @@ def main(config: DictConfig) -> None:
     with open(os.path.join(path_to_artifacts_dir, 'config.yaml'), 'w') as fd: # save config
         OmegaConf.save(config=config, f=fd)
     
-    # Trainer
+    # Trainer - Single CUDA GPU only
     trainer = pl.Trainer(
         logger=loggers,
         callbacks=callbacks,
-        accelerator='gpu',
-        devices=config.trainer.devices,
-        strategy=config.trainer.distributed_backend,
+        accelerator='cuda',  # Always use CUDA
+        devices=1,  # Always single GPU
+        strategy='auto',  # Auto strategy for single GPU
         limit_train_batches=config.trainer.limit_train_batches,
         limit_val_batches=config.trainer.limit_val_batches,
         log_every_n_steps=config.logging.log_every_n_steps,
         precision="bf16" if torch.cuda.is_bf16_supported() else 16,
-        val_check_interval=config.trainer.val_check_interval, # check val set every 10% of training batches (useful for large training datasets, rather than wait for full epoch to finish)
-        check_val_every_n_epoch=config.trainer.check_val_every_n_epoch, # log val PPL at end of every epoch
+        val_check_interval=config.trainer.val_check_interval,
+        check_val_every_n_epoch=config.trainer.check_val_every_n_epoch,
         max_epochs=config.trainer.max_epochs,
         min_epochs=config.trainer.min_epochs,
         accumulate_grad_batches=config.trainer.accumulate_grad_batches,
         gradient_clip_val=config.trainer.gradient_clip_value,
         gradient_clip_algorithm=config.trainer.gradient_clip_algorithm,
-        use_distributed_sampler=False if getattr(config.data.dataloader, 'mode', 'batch') == 'approx' else True
+        use_distributed_sampler=False  # No distributed sampler for single GPU
     )
 
     # Run

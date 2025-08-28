@@ -2,12 +2,10 @@ main:
   # Training seed.
   seed: 1
   # Where outputs will be saved; If folder exists, then run will be resumed from this directory's `../ckpts/last.ckpt` file
-  path_to_output_dir: /share/pi/nigam/mwornow/hf_ehr/cache/runs/${now:%Y-%m-%d_%H-%M-%S}/
+  path_to_output_dir: ${oc.env:OUTPUT_DIR,./outputs}/runs/${now:%Y-%m-%d_%H-%M-%S}/
   # If TRUE, then delete existing checkpoint and restart from scratch
   # If FALSE, then resume from the checkpoint in the file `last.ckpt` in `path_to_output_dir` (if exists)
   is_force_restart: False
-  # If TRUE, then rewrite paths to use Shah Lab Carina directories (useful for internal Shah Lab runs)
-  is_carina: False
 
 hydra:
   run:
@@ -39,7 +37,7 @@ callbacks:
 data:
   dataset:
     # Path to FEMR extract
-    path_to_femr_extract: /share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes
+    path_to_femr_extract: ${oc.env:DATA_DIR,./data}/femr_extract
     is_debug: False
   dataloader:
     # To avoid changing the config file for each run, specify the mode and keep both batch_size and 
@@ -70,10 +68,10 @@ trainer:
   gradient_clip_value: 1.0
   # Whether to clip the gradients based on their 'norm' or 'value'
   gradient_clip_algorithm: norm
-  # List of devices to run on
-  devices: 0,1,2,3
-  # Supports: dp, ddp, ddp2, fsdp, deepspeed
-  distributed_backend: ddp
+  # Single GPU configuration
+  devices: 1
+  # Single GPU - no distributed backend needed
+  accelerator: cuda
   # Limits training to a minimum number of epochs
   min_epochs: 1
   # Limits training to a max number number of epochs
@@ -112,9 +110,9 @@ logging:
     # Wandb run name (if NULL, then will use wandb's default random namep)
     name: null
     # Wandb entity name (i.e. name of wandb organization)
-    entity: ehr-fm
+    entity: ${oc.env:WANDB_ENTITY,na399-ai}
     # Wandb project name
-    project: hf_ehr
+    project: ${oc.env:WANDB_PROJECT,hf-ehr-training}
     # DEFAULT behavior (FALSE) is if resuming from a checkpoint, then resume the existing wandb run from the last step in that model's checkpoint
     # If TRUE, then create a new wandb run from scratch (even if resuming from a checkpoint)
     # Setting to TRUE is helpful for quick debugging b/c resuming logging from an existing run can be slow (wandb needs to re-upload all data from previous run)

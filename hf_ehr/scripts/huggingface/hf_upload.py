@@ -25,7 +25,7 @@ def get_param_count(model) -> int:
 HF_USERNAME = "Miking98"
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-base_dir: str = '/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/'
+base_dir: str = './data/suhana/hf_ehr/cache/runs_backup/'
 models = [ 
     'gpt-base-512--clmbr',
     'gpt-base-1024--clmbr',

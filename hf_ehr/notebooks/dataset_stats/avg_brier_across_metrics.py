@@ -12,7 +12,7 @@ def compute_avg_brier_by_quartiles(df):
 
 def main():
     # Define the directory containing the CSV files
-    csv_dir = "/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/"
+    csv_dir = "./ehrshot-benchmark/ehrshot/stratify/"
     
     # Explicit list of the files you want to include
     selected_files_1 = [

@@ -3,4 +3,4 @@
 data:
   dataset:
     name: MEDSDataset
-    path_to_meds_reader_extract: /share/pi/nigam/mwornow/mimic-iv-demo-meds-reader
+    path_to_meds_reader_extract: ${oc.env:HOME,~}/mimic-iv-demo-meds-reader

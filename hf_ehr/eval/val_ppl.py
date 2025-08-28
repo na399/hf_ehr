@@ -192,11 +192,11 @@ def eval(model: BaseModel,
 def map_datasource_to_femr_extract(datasource: str) -> str:
     """Maps data source name (e.g. 'mimic4') to the proper path to FEMR extract"""
     if datasource == 'starr':
-        return '/share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
+        return './data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
     elif datasource == 'ehrshot':
-        return '/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/femr/extract'
+        return './ehrshot-benchmark/EHRSHOT_ASSETS/femr/extract'
     elif datasource == 'mimic4':
-        return '/share/pi/nigam/data/femr_mimic_4_extract'
+        return './data/femr_mimic_4_extract'
     else:
         raise ValueError(f"Unknown datasource: {datasource}")
 

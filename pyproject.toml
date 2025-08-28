@@ -10,7 +10,7 @@ authors = [
 ]
 description = "Code for Context Clues paper"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.11"
 dependencies = [
     "polars==1.1",
     "transformers==4.48.2",
@@ -21,7 +21,7 @@ dependencies = [
     "lightning==2.5.0",
     "numpy==1.26.0",
     "pytorch-nlp==0.5.0",
-    "wandb==0.15.11",
+    "wandb==0.21.1",
     "loguru==0.7.2",
     "omegaconf==2.3.0",
     "jaxtyping==0.2.22",
@@ -42,7 +42,10 @@ dependencies = [
     "pyyaml==6.0.1",
     "build",
     "twine",
-    "torch"
+    "torch",
+    "dotenv>=0.9.9",
+    "mamba-ssm>=2.2.5",
+    "causal-conv1d>=1.5.2",
 ]
 
 [project.urls]

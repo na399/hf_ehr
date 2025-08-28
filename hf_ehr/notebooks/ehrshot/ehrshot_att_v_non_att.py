@@ -99,7 +99,7 @@ def process_all_tasks(ehrshot_dir, models_list, output_csv):
     print(f"Comparison saved to {output_csv}")
 
 # Example usage
-ehrshot_dir = '/share/pi/nigam/migufuen/ehrshot-benchmark/EHRSHOT_ASSETS/results_ehrshot'
+ehrshot_dir = './data/migufuen/ehrshot-benchmark/EHRSHOT_ASSETS/results_ehrshot'
 models_list = [
     'mamba-tiny-16384--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last',
     'mamba-tiny-16384-att--clmbr_train-tokens-total_nonPAD-ckpt_val=2000000000-persist_chunk:last_embed:last']

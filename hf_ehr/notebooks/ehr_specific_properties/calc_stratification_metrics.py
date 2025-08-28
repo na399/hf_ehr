@@ -18,11 +18,11 @@ from femr.datasets import PatientDatabase
 from femr.labelers import load_labeled_patients, LabeledPatients
 from starr_eda import calc_n_gram_count, calc_inter_event_times
 
-PATH_TO_DATABASE: str = '/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/femr/extract'
-PATH_TO_FEATURES_DIR: str = '/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/features_ehrshot'
-PATH_TO_TOKENIZED_TIMELINES_DIR: str = '/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/tokenized_timelines_ehrshot'
-PATH_TO_LABELS_DIR: str = '/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/benchmark_ehrshot'
-PATH_TO_SPLIT_CSV: str = '/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/splits_ehrshot/person_id_map.csv'
+PATH_TO_DATABASE: str = './ehrshot-benchmark/EHRSHOT_ASSETS/femr/extract'
+PATH_TO_FEATURES_DIR: str = './ehrshot-benchmark/EHRSHOT_ASSETS/features_ehrshot'
+PATH_TO_TOKENIZED_TIMELINES_DIR: str = './ehrshot-benchmark/EHRSHOT_ASSETS/tokenized_timelines_ehrshot'
+PATH_TO_LABELS_DIR: str = './ehrshot-benchmark/EHRSHOT_ASSETS/benchmark_ehrshot'
+PATH_TO_SPLIT_CSV: str = './ehrshot-benchmark/EHRSHOT_ASSETS/splits_ehrshot/person_id_map.csv'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -30,7 +30,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Output directory
-    path_to_output_dir: str = '/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/'
+    path_to_output_dir: str = './ehrshot-benchmark/ehrshot/stratify/'
     os.makedirs(path_to_output_dir, exist_ok=True)
 
     # Load labeled patients for this task

@@ -4,7 +4,7 @@ import os
 import pandas as pd
 
 # Directory containing the CSV files
-csv_dir = "/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/stratify/"
+csv_dir = "./ehrshot-benchmark/ehrshot/stratify/"
 
 # List of files to process
 selected_files = [

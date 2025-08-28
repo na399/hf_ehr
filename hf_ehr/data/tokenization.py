@@ -165,7 +165,7 @@ class BaseTokenizer(PreTrainedTokenizer):
 
     def get_path_to_tokenizer_version_dir(self) -> str:
         """
-            Example path: /share/pi/nigam/mwornow/hf_ehr/cache/tokenizer_v8/versions/2021-08-10_15-00-00/
+            Example path: ./cache/tokenizer_v8/versions/2021-08-10_15-00-00/
 
             The tokenizer can have multiple versions depending on its `self.metadata`. 
             This method returns the path to the folder containing the exact version that matches `self.metadata`.
@@ -195,7 +195,7 @@ class BaseTokenizer(PreTrainedTokenizer):
     
     def get_path_to_dataset_dir(self, dataset: 'Dataset') -> str:
         """
-            Example path: /share/pi/nigam/mwornow/hf_ehr/cache/tokenizer_v8/versions/2021-08-10_15-00-00/datasets/v8/
+            Example path: ./cache/tokenizer_v8/versions/2021-08-10_15-00-00/datasets/v8/
         
             The tokenizer can have certain dataset-specific properties. 
             We store those in a datasets/ folder within the versions/ folder.
@@ -295,7 +295,16 @@ class BaseCodeTokenizer(BaseTokenizer):
 
     def __init__(self) -> None:
         # Create vocab
-        self.special_tokens = [ '[BOS]', '[EOS]', '[UNK]', '[SEP]', '[PAD]', '[CLS]', '[MASK]']
+        # Only set special_tokens if not already set by subclass
+        if not hasattr(self, 'special_tokens'):
+            self.special_tokens = [ '[BOS]', '[EOS]', '[UNK]', '[SEP]', '[PAD]', '[CLS]', '[MASK]']
+        
+        # Ensure base special tokens are included
+        base_special_tokens = [ '[BOS]', '[EOS]', '[UNK]', '[SEP]', '[PAD]', '[CLS]', '[MASK]']
+        for token in base_special_tokens:
+            if token not in self.special_tokens:
+                self.special_tokens.insert(0, token)
+        
         self.vocab = self.special_tokens + self.non_special_tokens
 
         # Map tokens -> idxs
@@ -437,38 +446,36 @@ class CookbookTokenizer(BaseCodeTokenizer):
             if key in self.metadata:
                 self.metadata.pop(key)
         
-        #  # Initialize special tokens
-        # # TODO -- prepend all these attributes with 'token_' for readibility
-        # self.visit_start = "[VISIT START]"
-        # self.visit_end = "[VISIT END]"
-        # self.day_atts_cehr_gpt = [f"[DAY {i}]" for i in range(1, 1081)]
-        # self.long_att_cehr_gpt = "[LONG TERM]"
-        # self.day_atts_cehr_bert = [f"[DAY {i}]" for i in range(1, 7)]
-        # self.week_atts = [f"[WEEK {i}]" for i in range(1, 4)]
-        # self.month_atts = [f"[MONTH {i}]" for i in range(1, 12)]
-        # self.long_att_cehr_bert = "[LONG TERM]"
+        # Initialize special tokens for visits and time intervals
+        self.visit_start = "[VISIT START]"
+        self.visit_end = "[VISIT END]"
+        self.day_atts_cehr_gpt = [f"[DAY {i}]" for i in range(1, 1081)]
+        self.long_att_cehr_gpt = "[LONG TERM]"
+        self.day_atts_cehr_bert = [f"[DAY {i}]" for i in range(1, 7)]
+        self.week_atts = [f"[WEEK {i}]" for i in range(1, 4)]
+        self.month_atts = [f"[MONTH {i}]" for i in range(1, 12)]
+        self.long_att_cehr_bert = "[LONG TERM]"
 
-        # # Add special tokens to the vocabulary
-        # self.special_tokens.extend(self.day_atts_cehr_gpt)
-        # self.special_tokens.append(self.long_att_cehr_gpt)
-        # self.special_tokens.extend(self.day_atts_cehr_bert)
-        # self.special_tokens.extend(self.week_atts)
-        # self.special_tokens.extend(self.month_atts)
-        # self.special_tokens.append(self.long_att_cehr_bert)
-        # self.special_tokens.extend([self.visit_start, self.visit_end])
+        # CRITICAL: Build complete special tokens list BEFORE calling super().__init__()
+        # This ensures all special tokens are included in the vocabulary mapping
+        self.special_tokens = [
+            self.visit_start, self.visit_end,
+            self.long_att_cehr_gpt, self.long_att_cehr_bert
+        ] + self.day_atts_cehr_gpt + self.day_atts_cehr_bert + self.week_atts + self.month_atts
 
-        # Metadata
+        # Metadata for filtering and processing
         self.is_remap_numerical_codes_to_quantiles: bool = metadata.get('is_remap_numerical_codes_to_quantiles', False)
         self.excluded_vocabs: Optional[Set[str]] = { x.lower() for x in metadata.get('excluded_vocabs', {}) } if metadata.get('excluded_vocabs', {}) else None # type: ignore
         self.min_code_occurrence_count: Optional[int] = metadata.get('min_code_occurrence_count', None)
         self.keep_n_max_occurrence_codes: Optional[int] = metadata.get('keep_n_max_occurrence_codes', None)
 
-        # Apply filtering
+        # Apply filtering to tokenizer config
         self.tokenizer_config, self.excluded_tokens = filter_tokenizer_config(self.tokenizer_config, 
                                                                               self.excluded_vocabs, 
                                                                               self.min_code_occurrence_count,
                                                                               self.keep_n_max_occurrence_codes)
-        # Tokens
+        
+        # Build non-special tokens from filtered config
         self.code_2_token = {} # [key] = token; [val] = { 'type' : str, 'tokenization' : dict, 'token' : str }
         self.non_special_tokens: List[str] = []
         
@@ -482,7 +489,7 @@ class CookbookTokenizer(BaseCodeTokenizer):
             })
             self.non_special_tokens.append(entry.to_token())
         
-        # Create tokenizer
+        # Create tokenizer - this will use self.special_tokens and self.non_special_tokens
         super().__init__()
 
     def convert_event_to_token(self, e: Event, **kwargs) -> Optional[str]:
@@ -563,16 +570,22 @@ class CookbookTokenizer(BaseCodeTokenizer):
                 # This will be inserted between the prior visit and the current visit
                 if previous_visit_end is not None:
                     interval: float = (e.start - previous_visit_end).days # Time (in days) between this visit's start and the immediately preceding visit's end
-                    assert interval >= 0, f"Interval has value = {interval} but should always be positive, but fails on {e}."
+                    # Handle negative intervals (overlapping visits) by treating them as same-day
+                    if interval < 0:
+                        interval = 0
                     
                     if self.is_add_day_att:
-                        if interval <= 1080:
+                        if interval == 0:
+                            att = self.day_atts_cehr_gpt[0]  # Use [DAY 1] for same-day visits
+                        elif interval <= 1080:
                             att = self.day_atts_cehr_gpt[interval - 1]
                         else:
                             att = self.long_att_cehr_gpt
                         tokens.append(att)
                     elif self.is_add_day_week_month_att:
-                        if interval < 7:
+                        if interval == 0:
+                            att = self.day_atts_cehr_bert[0]  # Use [DAY 1] for same-day visits
+                        elif interval < 7:
                             att = self.day_atts_cehr_bert[interval - 1]
                         elif 7 <= interval < 30:
                             att = self.week_atts[(interval // 7) - 1]
@@ -1092,9 +1105,9 @@ def collate_femr_timelines(batch: List[Tuple[int, List[Event]]],
 if __name__ == '__main__':
     from hf_ehr.data.datasets import FEMRDataset
     
-    PATH_TO_CACHE_DIR: str = '/share/pi/nigam/mwornow/hf_ehr/cache/'
+    PATH_TO_CACHE_DIR: str = './cache/'
     # Datasets
-    PATH_TO_FEMR_EXTRACT_v8 = '/share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
+    PATH_TO_FEMR_EXTRACT_v8 = './data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
     # Tokenizers
     PATH_TO_TOKENIZERS_DIR: str = os.path.join(PATH_TO_CACHE_DIR, 'tokenizers/')
     PATH_TO_TOKENIZER_CLMBR_v8_DIR: str = os.path.join(PATH_TO_TOKENIZERS_DIR, 'clmbr_v8/')

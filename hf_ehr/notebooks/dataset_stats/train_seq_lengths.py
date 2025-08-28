@@ -9,13 +9,13 @@ from typing import Dict, List
 from tqdm import tqdm
 import json
  
-PATH_TO_FEMR_EXTRACT_v8 = '/share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
+PATH_TO_FEMR_EXTRACT_v8 = './data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
  
 # dataset_name: str = 'FEMRDataset'
 dataset_name: str = 'AllTokensFEMRDataset'
 
 # Load config
-config = load_config_from_path('/share/pi/nigam/suhana/hf_ehr/cache/runs_backup/mamba-tiny-16384--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt')
+config = load_config_from_path('./data/suhana/hf_ehr/cache/runs_backup/mamba-tiny-16384--clmbr/ckpts/train-tokens-total_nonPAD-ckpt_val=2000000000-persist.ckpt')
 OmegaConf.set_struct(config, False)
 config.data.dataset.path_to_femr_extract = PATH_TO_FEMR_EXTRACT_v8
 

@@ -10,8 +10,8 @@ from tqdm import tqdm
 from omegaconf import DictConfig
 from hf_ehr.trainer.loaders import load_datasets
 
-PATH_TO_FEMR_EXTRACT_v9 = '/share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_08_13_extract_v9_lite'
-PATH_TO_PATIENT_DEMOGRAPHICS = '/share/pi/nigam/migufuen/hf_ehr/cache/dataset/patient_demographics_split.json'
+PATH_TO_FEMR_EXTRACT_v9 = './data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_08_13_extract_v9_lite'
+PATH_TO_PATIENT_DEMOGRAPHICS = './data/migufuen/hf_ehr/cache/dataset/patient_demographics_split.json'
 
 def write_to_json(demographics: Dict, output_file: str) -> None:
     with open(output_file, 'w') as f:

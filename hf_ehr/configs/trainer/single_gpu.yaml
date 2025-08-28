@@ -1,9 +1,11 @@
 # @package _global_
+# Single CUDA GPU configuration
 
 trainer:
-  devices: [0]
-  distributed_backend: ddp
+  devices: 1  # Always single GPU
+  accelerator: cuda  # Always CUDA
 
 data:
   dataloader:
     n_workers: 4
+    pin_memory: true  # Optimize for CUDA

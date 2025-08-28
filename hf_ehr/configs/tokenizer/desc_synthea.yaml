@@ -1,0 +1,6 @@
+# @package _global_
+
+data:
+  tokenizer:
+    name: DescTokenizer
+    path_to_config: ${oc.env:TOKENIZER_CACHE_DIR,./cache/tokenizers}/desc_synthea/tokenizer_config.json

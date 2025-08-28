@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Paths
-input_parquet_path = '/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/eda/df__starr__inter_event_times.parquet'
+input_parquet_path = './ehrshot-benchmark/ehrshot/eda/df__starr__inter_event_times.parquet'
 
 # Load the Parquet file
 df = pd.read_parquet(input_parquet_path)

@@ -101,11 +101,11 @@ class WandbRelogger:
 
 
 if __name__ == '__main__':
-    # run_log_path = '/share/pi/nigam/migufuen/hf_ehr/cache/runs/hyena-medium-log-test/logs/'
-    run_log_path = '/share/pi/nigam/migufuen/hf_ehr/cache/runs/hyena-medium-log-test2/logs'
-    # run_log_path = '/share/pi/nigam/migufuen/hf_ehr/cache/runs/gpt2-base-10-epochs/logs/'
-    # run_log_path = '/share/pi/nigam/migufuen/hf_ehr/cache/runs/gpt2-base-lr-1e-4/logs/'
-    ckpt_path = '/share/pi/nigam/migufuen/hf_ehr/cache/runs/hyena-medium-log-test2/ckpts/last.ckpt'
+    # run_log_path = './data/migufuen/hf_ehr/cache/runs/hyena-medium-log-test/logs/'
+    run_log_path = './data/migufuen/hf_ehr/cache/runs/hyena-medium-log-test2/logs'
+    # run_log_path = './data/migufuen/hf_ehr/cache/runs/gpt2-base-10-epochs/logs/'
+    # run_log_path = './data/migufuen/hf_ehr/cache/runs/gpt2-base-lr-1e-4/logs/'
+    ckpt_path = './data/migufuen/hf_ehr/cache/runs/hyena-medium-log-test2/ckpts/last.ckpt'
     reloader = WandbRelogger('hf_ehr', 'ehr-fm')
     new_run = reloader.relog_metrics(ckpt_path, run_log_path)
     print(new_run.id)

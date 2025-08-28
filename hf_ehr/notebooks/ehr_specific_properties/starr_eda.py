@@ -148,7 +148,7 @@ def calc_inter_event_times(femr_db, pids: List[int], label_times: Optional[List[
     return df
 
 if __name__ == '__main__':
-    path_to_output_dir: str = '/share/pi/nigam/mwornow/ehrshot-benchmark/ehrshot/eda/'
+    path_to_output_dir: str = './ehrshot-benchmark/ehrshot/eda/'
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--is_ehrshot', action='store_true', help='If TRUE, then use EHRSHOT_ASSETS, else use SOM-RIT-PHI-STARR-PROD')
@@ -159,14 +159,14 @@ if __name__ == '__main__':
     if args.is_ehrshot:
         # EHRSHOT
         label: str = 'ehrshot'
-        PATH_TO_DATABASE: str = '/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/femr/extract'
+        PATH_TO_DATABASE: str = './ehrshot-benchmark/EHRSHOT_ASSETS/femr/extract'
         femr_db = PatientDatabase(PATH_TO_DATABASE)
-        val_pids = pd.read_csv('/share/pi/nigam/mwornow/ehrshot-benchmark/EHRSHOT_ASSETS/splits_ehrshot/person_id_map.csv')
+        val_pids = pd.read_csv('./ehrshot-benchmark/EHRSHOT_ASSETS/splits_ehrshot/person_id_map.csv')
         val_pids = val_pids[val_pids['split'] == 'val']['omop_person_id'].values
     else:
         # STARR
         label: str = 'starr'
-        PATH_TO_DATABASE: str = '/share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
+        PATH_TO_DATABASE: str = './data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes'
         femr_db = PatientDatabase(PATH_TO_DATABASE)
         all_pids: np.ndarray = np.array([ pid for pid in femr_db ])
         hashed_pids: np.ndarray = np.array([ femr_db.compute_split(SPLIT_SEED, pid) for pid in all_pids ])

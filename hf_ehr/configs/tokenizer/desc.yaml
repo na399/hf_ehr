@@ -3,7 +3,7 @@
 data:
   tokenizer:
     name: DescTokenizer
-    path_to_config: /share/pi/nigam/mwornow/hf_ehr/cache/tokenizers/desc_v8/tokenizer_config.json
+    path_to_config: ${oc.env:CACHE_DIR,./cache}/tokenizers/desc_v8/tokenizer_config.json
     metadata:
       desc_emb_tokenizer: 'bert-base-uncased'
       excluded_vocabs:

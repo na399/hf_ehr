@@ -3,7 +3,7 @@
 data:
   tokenizer:
     name: CEHRTokenizer
-    path_to_config: /share/pi/nigam/mwornow/hf_ehr/cache/tokenizers/cehr_v8/tokenizer_config.json
+    path_to_config: ${oc.env:CACHE_DIR,./cache}/tokenizers/cehr_v8/tokenizer_config.json
     metadata:
       is_add_visit_start: True # If True, add "VISIT START" token before the start of every visit
       is_add_visit_end: True # If True, add "VISIT END" token after every visit
