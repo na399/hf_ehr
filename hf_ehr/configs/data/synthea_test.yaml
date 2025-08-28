@@ -1,0 +1,20 @@
+# @package _global_
+
+data:
+  dataset:
+    name: MEDSDataset
+    path_to_meds_reader_extract: ${oc.env:MEDS_READER_DIR,./data/synthea_meds_reader}
+    is_debug: false
+    seed: 42
+
+  dataloader:
+    mode: batch  # batch or approx
+    batch_size: ${oc.env:DEFAULT_BATCH_SIZE,auto}  # Will be auto-adjusted based on device
+    max_length: 512  # Start with shorter sequences for testing
+    n_workers: ${oc.env:DEFAULT_NUM_WORKERS,auto}  # Will be auto-adjusted
+    
+    # For approx mode (if needed)
+    approx_batch_sampler:
+      max_tokens: 8192  # Adjust based on model and device
+      max_seq_len: 512
+      iteration_dataloader_n_workers: 2

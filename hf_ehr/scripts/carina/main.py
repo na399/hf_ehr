@@ -318,9 +318,11 @@ def main():
     
     if args.is_force_refresh:
         now: str = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        command.append(f"main.path_to_output_dir=/share/pi/nigam/{os.environ['USER']}/hf_ehr/cache/runs/{now}")
+        output_dir = os.getenv('OUTPUT_DIR', './outputs')
+        command.append(f"main.path_to_output_dir={output_dir}/runs/{now}")
     else:
-        command.append(f"main.path_to_output_dir=/share/pi/nigam/{os.environ['USER']}/hf_ehr/cache/runs/{args.model}-{args.size}-{args.context_length}--{args.tokenizer}")
+        output_dir = os.getenv('OUTPUT_DIR', './outputs')
+        command.append(f"main.path_to_output_dir={output_dir}/runs/{args.model}-{args.size}-{args.context_length}--{args.tokenizer}")
 
     # Add model-specific args
     if args.model == 'gpt2':
@@ -380,8 +382,8 @@ def main():
     with open(path_to_sbatch_script, 'w') as f:
         f.write(f"""#!/bin/bash
 #SBATCH --job-name={run_short_name}
-#SBATCH --output=/share/pi/nigam/{os.environ['USER']}/hf_ehr/slurm_logs/{run_short_name}_%A.out
-#SBATCH --error=/share/pi/nigam/{os.environ['USER']}/hf_ehr/slurm_logs/{run_short_name}_%A.err
+#SBATCH --output={os.getenv('LOG_DIR', './logs')}/slurm/{run_short_name}_%A.out
+#SBATCH --error={os.getenv('LOG_DIR', './logs')}/slurm/{run_short_name}_%A.err
 #SBATCH --time=48:00:00
 #SBATCH --partition={partitions}
 #SBATCH --mem=200G
@@ -399,7 +401,7 @@ def main():
     print(f"Submitted job:\n```\nsbatch {path_to_sbatch_script}\n```\n")
     stmt: str = subprocess.run(["sbatch", path_to_sbatch_script], capture_output=True, text=True).stdout
     slurm_job_id: int = int(stmt.split(" job ")[-1])
-    print(f"Logging to:\n```\n/share/pi/nigam/{os.environ['USER']}/hf_ehr/slurm_logs/{run_short_name}_{slurm_job_id}.err\n```\n")
+    print(f"Logging to:\n```\n{os.getenv('LOG_DIR', './logs')}/slurm/{run_short_name}_{slurm_job_id}.err\n```\n")
     
 if __name__ == "__main__":
     main()

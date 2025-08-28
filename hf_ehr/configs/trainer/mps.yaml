@@ -1,0 +1,20 @@
+# @package _global_
+# Configuration for Apple Silicon (MPS) devices
+
+trainer:
+  accelerator: mps
+  devices: 1
+  precision: 16  # MPS doesn't support bf16
+  distributed_backend: null  # No distributed training on MPS
+  
+  # Gradient accumulation for effective larger batch sizes
+  accumulate_grad_batches: 4
+  
+  # Memory optimization
+  gradient_clip_value: 1.0
+  gradient_clip_algorithm: norm
+
+data:
+  dataloader:
+    n_workers: 2  # Lower for unified memory architecture
+    pin_memory: false  # Not applicable for MPS
