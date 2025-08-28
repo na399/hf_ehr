@@ -66,8 +66,16 @@ class HyenaLanguageModel(BaseModel):
     def __init__(self, config: DictConfig, vocab_size, pad_token_id) -> None:
         super(HyenaLanguageModel, self).__init__(config, vocab_size, pad_token_id)
 
+        # Enable BF16 for better training stability on modern GPUs
+        if torch.cuda.get_device_capability('cuda')[0] >= 8:
+            kwargs = {
+                'torch_dtype': torch.bfloat16,
+            }
+        else:
+            kwargs = {}
+
         # Model specs
-        model_config = AutoConfig.from_pretrained(config.model.hf_name, trust_remote_code=True)
+        model_config = AutoConfig.from_pretrained(config.model.hf_name, trust_remote_code=True, **kwargs)
         model_config.vocab_size = vocab_size
         model_config.n_positions = config.data.dataloader.max_length
         for key, val in config.model.config_kwargs.items():
@@ -77,7 +85,7 @@ class HyenaLanguageModel(BaseModel):
         self.model_config = model_config
 
         # Model
-        self.model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_config(model_config, trust_remote_code=True, **kwargs)
         
         # Run any post-init handlers from super()
         self.post_init()

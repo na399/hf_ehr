@@ -72,8 +72,16 @@ class BERTLanguageModel(BaseModel):
     def __init__(self, config: DictConfig, vocab_size, pad_token_id) -> None:
         super(BERTLanguageModel, self).__init__(config, vocab_size, pad_token_id)
 
+        # Enable BF16 for better training stability on modern GPUs
+        if torch.cuda.get_device_capability('cuda')[0] >= 8:
+            kwargs = {
+                'torch_dtype': torch.bfloat16,
+            }
+        else:
+            kwargs = {}
+
         # Model specs
-        model_config = AutoConfig.from_pretrained(config.model.hf_name if hasattr(config.model, 'hf_name') else 'bert-base-uncased')
+        model_config = AutoConfig.from_pretrained(config.model.hf_name if hasattr(config.model, 'hf_name') else 'bert-base-uncased', **kwargs)
         model_config.vocab_size = vocab_size
         model_config.n_positions = config.data.dataloader.max_length
         for key, val in config.model.config_kwargs.items():
@@ -83,7 +91,7 @@ class BERTLanguageModel(BaseModel):
         self.hidden_size = model_config.n_embd if hasattr(model_config, 'n_embd') else model_config.hidden_size
 
         # Model
-        self.model = AutoModelForMaskedLM.from_config(model_config)
+        self.model = AutoModelForMaskedLM.from_config(model_config, **kwargs)
         self.is_use_rope = getattr(config.data.dataloader, 'is_use_rope', False) # added to replace default attention layers with custom RoPEGPT2Attention layers
         
         if self.is_use_rope:

@@ -5,8 +5,8 @@
 
 model:
   name: llama
-  # Name/path to pass to HF.from_pretrained()
-  hf_name: meta-llama/Meta-Llama-3.1-8B-Instruct
+  # Creating Llama architecture from scratch (not downloading from Meta)
+  # hf_name: Not used - we create config directly
   # If TRUE, then keep pretrained weights
   is_keep_pretrained_weights: False
   # shared settings from Llama 3.1 techhnical paper 

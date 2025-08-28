@@ -1,14 +1,14 @@
 import torch
 from torch import optim
 import lightning as L
-import torch.distributed as dist
+# Removed distributed training - single GPU only
 from tqdm import tqdm
 from omegaconf import DictConfig
 from torchmetrics.aggregation import SumMetric, CatMetric
 from jaxtyping import Float
 from typing import Dict, List, Any, Optional, Union
 import wandb
-from lightning.pytorch.utilities import rank_zero_only
+# Removed distributed utilities - single GPU only
 from hf_ehr.utils import lr_warmup_with_constant_plateau
 from loguru import logger
 
@@ -124,14 +124,8 @@ class BaseModel(L.LightningModule):
         loss: torch.Tensor = outputs.loss
                 
         if torch.isnan(loss).any():
-            nan_detected = torch.tensor([1.0], device=self.device)
-        else:
-            nan_detected = torch.tensor([0.0], device=self.device)
-
-        dist.all_reduce(nan_detected, op=dist.ReduceOp.MAX)
-        if nan_detected.item() == 1:
-            print("NaN detected in loss, skipping this batch across all processes.")
-            return  # Skip this batch on all processes
+            print("NaN detected in loss, skipping this batch.")
+            return  # Skip this batch
 
         # Logging
         self.log_validation_step(loss, tokens) # ! NOTE: I'm assuming this loss is averaged over all non-PAD tokens for this function call
@@ -144,7 +138,7 @@ class BaseModel(L.LightningModule):
             self.trainer.train_dataloader.batch_sampler.set_epoch(self.current_epoch + 1)
 
     def on_train_start(self):
-        if rank_zero_only.rank == 0 and wandb and wandb.run:
+        if wandb and wandb.run:
             wandb.run.summary["tokenizer_vocab_size"] = self.vocab_size
             wandb.run.summary["tokenizer_pad_token_id"] = self.pad_token_id
             wandb.run.summary["model_parameter_count"] = self.get_param_count()
@@ -184,7 +178,7 @@ class BaseModel(L.LightningModule):
                 self.trainer.train_dataloader.batch_sampler.sampler.set_epoch(self.trainer.current_epoch)
                 self.trainer.train_dataloader.batch_sampler.start_batch_idx = self.batch_idx if self.batch_idx > 0 else self.trainer.global_step
                 logger.success(f"We are resuming from a checkpoint that used `ApproxBatchSampler`, so set: `epoch={self.trainer.current_epoch}` and `start_batch_idx={self.trainer.train_dataloader.batch_sampler.start_batch_idx}`")
-        torch.distributed.barrier()
+        # Removed distributed barrier - single GPU only
 
     def on_validation_start(self):
         # When we restart validation, reset # of tokens that have gone into the val loss calculation to 0

@@ -6,6 +6,8 @@ model:
   hf_name: t5-base
   # If TRUE, then keep pretrained weights
   is_keep_pretrained_weights: False
+  # Config kwargs (can be overridden by specific model configs)
+  config_kwargs: {}
 
 # Default trainer
 trainer:

@@ -7,7 +7,6 @@ from omegaconf import DictConfig
 from typing import Dict, Any, Optional
 from jaxtyping import Float
 from hf_ehr.models.base import BaseModel
-from based.models.gpt import GPTLMHeadModel
 
 class BasedLanguageModel(BaseModel):
     """
@@ -17,7 +16,13 @@ class BasedLanguageModel(BaseModel):
     def __init__(self, config: DictConfig, vocab_size, pad_token_id) -> None:
         super(BasedLanguageModel, self).__init__(config, vocab_size, pad_token_id)
         
-        kwargs = {}
+        # Enable BF16 for better training stability on modern GPUs
+        if torch.cuda.get_device_capability('cuda')[0] >= 8:
+            kwargs = {
+                'torch_dtype': torch.bfloat16,
+            }
+        else:
+            kwargs = {}
 
         # Model specs
         model_config = AutoConfig.from_pretrained(config.model.hf_name if hasattr(config.model, 'hf_name') else 'gpt2', **kwargs)
@@ -32,9 +37,9 @@ class BasedLanguageModel(BaseModel):
         if getattr(config.model, 'is_keep_pretrained_weights', False):
             # TODO: Implement loading of pretrained weights
             raise NotImplementedError("Loading of pretrained weights is not yet implemented.")
-            self.model = GPTLMHeadModel.from_pretrained(model_config, **kwargs)
+            self.model = AutoModelForCausalLM.from_pretrained(model_config, **kwargs)
         else:
-            self.model = GPTLMHeadModel(model_config, **kwargs)
+            self.model = AutoModelForCausalLM.from_config(model_config, **kwargs)
 
         # Run any post-init handlers from super()
         self.post_init()

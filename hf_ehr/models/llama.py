@@ -1,5 +1,5 @@
 import torch
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, LlamaConfig
 from typing import Dict, List, Any, Optional, Union
 from omegaconf import DictConfig
 from jaxtyping import Float
@@ -15,20 +15,22 @@ class LlamaLanguageModel(BaseModel):
     def __init__(self, config: DictConfig, vocab_size, pad_token_id) -> None:
         super(LlamaLanguageModel, self).__init__(config, vocab_size, pad_token_id)
         
-        # Enable flash attention
+        # Enable BF16 for better training stability on modern GPUs
+        # Note: Flash Attention 2 requires separate installation
         if torch.cuda.get_device_capability('cuda')[0] >= 8:
             kwargs = {
-                'attn_implementation': 'flash_attention_2',
+                # 'attn_implementation': 'flash_attention_2',  # Uncomment if flash_attn is installed
                 'torch_dtype': torch.bfloat16,
             }
         else:
             kwargs = {}
 
-        # Model specs
-        model_config = AutoConfig.from_pretrained(config.model.hf_name, trust_remote_code=True, use_cache=False, **kwargs)
+        # Model specs - Create Llama config from scratch
+        model_config = LlamaConfig(**kwargs)
         model_config.vocab_size = vocab_size
+        model_config.use_cache = False
         for key, val in config.model.config_kwargs.items():
-            assert hasattr(model_config, key), f"Config for HF model {config.model.hf_name if hasattr(config.model, 'hf_name') else ''} does not have attribute {key}"
+            assert hasattr(model_config, key), f"Config for Llama model does not have attribute {key}"
             setattr(model_config, key, val)
         self.model_config = model_config
         self.hidden_size = model_config.hidden_size

@@ -19,7 +19,7 @@ class MambaLanguageModel(BaseModel):
         if torch.cuda.get_device_capability('cuda')[0] >= 8:
             print("!!!! USING CACHE !!!!")
             kwargs = {
-                'torch_dtype': torch.float16,
+                'torch_dtype': torch.bfloat16,  # Use BF16 for better training stability
             }
         else:
             kwargs = {}

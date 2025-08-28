@@ -6,7 +6,6 @@ from typing import Dict, Any, Optional, Union
 from omegaconf import DictConfig
 from typing import Dict, Any, Optional
 from jaxtyping import Float
-from lightning.pytorch.utilities import rank_zero_only
 from hf_ehr.models.base import BaseModel
 
 #######################################
@@ -95,11 +94,12 @@ class GPTLanguageModel(BaseModel):
     def __init__(self, config: DictConfig, vocab_size, pad_token_id) -> None:
         super(GPTLanguageModel, self).__init__(config, vocab_size, pad_token_id)
 
-        # Enable flash attention
+        # Enable BF16 for better training stability on modern GPUs
+        # Note: Flash Attention 2 requires separate installation
         if torch.cuda.get_device_capability('cuda')[0] >= 8:
             kwargs = {
-                # 'attn_implementation': 'flash_attention_2',
-                # 'torch_dtype': torch.bfloat16,
+                # 'attn_implementation': 'flash_attention_2',  # Uncomment if flash_attn is installed
+                'torch_dtype': torch.bfloat16,
             }
         else:
             kwargs = {}

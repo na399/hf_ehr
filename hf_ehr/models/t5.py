@@ -14,8 +14,16 @@ class T5LanguageModel(BaseModel):
     def __init__(self, config: DictConfig, vocab_size, pad_token_id) -> None:
         super(T5LanguageModel, self).__init__(config, vocab_size, pad_token_id)
 
+        # Enable BF16 for better training stability on modern GPUs
+        if torch.cuda.get_device_capability('cuda')[0] >= 8:
+            kwargs = {
+                'torch_dtype': torch.bfloat16,
+            }
+        else:
+            kwargs = {}
+
         # Model specs
-        model_config = AutoConfig.from_pretrained(config.model.hf_name if hasattr(config.model, 'hf_name') else 't5-base')
+        model_config = AutoConfig.from_pretrained(config.model.hf_name if hasattr(config.model, 'hf_name') else 't5-base', **kwargs)
         model_config.vocab_size = vocab_size
         for key, val in config.model.config_kwargs.items():
             assert hasattr(model_config, key), f"Config for HF model {self.model_name} does not have attribute {key}"
@@ -23,7 +31,7 @@ class T5LanguageModel(BaseModel):
         self.hidden_size = model_config.d_model
 
         # Model
-        self.model = AutoModelForSeq2SeqLM.from_config(model_config)
+        self.model = AutoModelForSeq2SeqLM.from_config(model_config, **kwargs)
         
         # Run any post-init handlers from super()
         self.post_init()
