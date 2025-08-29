@@ -272,7 +272,6 @@ class BaseTokenizer(PreTrainedTokenizer):
                 print(f"No `seq_length_per_patient.json` found at `{path_to_cache_file}` for split=`{dataset.split}`. Generating `seq_length_per_patient.json` now...")
 
         # Calculate seq lengths in parallel
-        n_procs = 1 # TODO - remove
         if n_procs == 1:
             tasks: List[Tuple] = [(dataset.metadata, start, min(dataset.get_n_patients(), start + 1),) for start in range(0, dataset.get_n_patients(), 1) ]
             results: List[List[Tuple[int,int]]] = [ self.get_seq_length(t) for t in tqdm(tasks, total=len(tasks), desc=f"tokenizer.get_seq_length_per_patient() | n_procs={n_procs}") ]
@@ -491,14 +490,173 @@ class CookbookTokenizer(BaseCodeTokenizer):
         
         # Create tokenizer - this will use self.special_tokens and self.non_special_tokens
         super().__init__()
-
-    def convert_event_to_token(self, e: Event, **kwargs) -> Optional[str]:
-        """NOTE: This is basically the same as the CLMBR tokenizer's version."""
-        event_code = e.code
-        # If code isn't in vocab => ignore
-        if event_code not in self.code_2_token:
-            return None
         
+        # Load hierarchical rollup mappings if available
+        self.rollup_mapping: Optional[Dict[str, str]] = None
+        self._load_rollup_mapping()
+        
+        # Build hierarchical mappings for performance optimization
+        self.hierarchical_token_map: Optional[Dict[str, Dict]] = None
+        self._build_hierarchical_mappings()
+
+    def _load_rollup_mapping(self) -> None:
+        """Load hierarchical rollup mapping from rollup_mapping.json if it exists"""
+        try:
+            # Check if rollup mapping file exists in same directory as tokenizer config
+            rollup_mapping_path = os.path.join(
+                os.path.dirname(self.path_to_tokenizer_config), 
+                'rollup_mapping.json'
+            )
+            
+            if os.path.exists(rollup_mapping_path):
+                import json
+                with open(rollup_mapping_path, 'r') as f:
+                    rollup_data = json.load(f)
+                    self.rollup_mapping = rollup_data.get('rollup_mapping', {})
+                print(f"Loaded {len(self.rollup_mapping):,} hierarchical rollup mappings")
+            else:
+                print(f"No rollup mapping found at {rollup_mapping_path}")
+                
+        except Exception as e:
+            print(f"Warning: Failed to load rollup mapping: {e}")
+            self.rollup_mapping = None
+
+    def _build_hierarchical_mappings(self) -> None:
+        """Build unified hierarchical mappings for performance optimization"""
+        from tqdm import tqdm
+        
+        if not hasattr(self, 'code_2_token') or not self.code_2_token:
+            print("Warning: No base vocabulary found, skipping hierarchical mapping build")
+            return
+            
+        print("Building hierarchical token mappings for performance optimization...")
+        
+        # Initialize hierarchical mapping
+        self.hierarchical_token_map = {}
+        
+        # Step 1: Add all base vocabulary codes (hierarchy level 0)
+        print(f"  Adding {len(self.code_2_token)} base vocabulary codes...")
+        for code in tqdm(self.code_2_token.keys(), desc="Base vocab", leave=False):
+            self.hierarchical_token_map[code] = {
+                'target': code,
+                'level': 0,
+                'token_info': self.code_2_token[code]
+            }
+        
+        # Step 2: Add rollup mappings (hierarchy level 1+)
+        if self.rollup_mapping and len(self.rollup_mapping) > 0:
+            print(f"  Adding {len(self.rollup_mapping)} hierarchical rollup mappings...")
+            
+            for orig_code, target_code in tqdm(self.rollup_mapping.items(), 
+                                             desc="Rollup mappings", leave=False):
+                # Resolve the target code to its token info
+                if target_code in self.code_2_token:
+                    self.hierarchical_token_map[orig_code] = {
+                        'target': target_code,
+                        'level': 1,  # Single level rollup for now
+                        'token_info': self.code_2_token[target_code]
+                    }
+                else:
+                    # Handle case where rollup target is not in base vocab
+                    # This could happen with chained rollups or fallback mappings
+                    if target_code.startswith('[UNK'):
+                        # Handle UNK tokens specially
+                        self.hierarchical_token_map[orig_code] = {
+                            'target': target_code,
+                            'level': 1,
+                            'token_info': None  # UNK tokens don't have traditional token info
+                        }
+        
+        total_mapped = len(self.hierarchical_token_map)
+        base_count = len(self.code_2_token)
+        rollup_count = total_mapped - base_count
+        
+        print(f"✅ Hierarchical mappings built: {total_mapped:,} total codes")
+        print(f"   • Base vocabulary: {base_count:,} codes (level 0)")
+        print(f"   • Rollup mappings: {rollup_count:,} codes (level 1+)")
+        if rollup_count > 0:
+            coverage = (total_mapped / (base_count + len(self.rollup_mapping or {}))) * 100
+            print(f"   • Total coverage: {coverage:.1f}%")
+
+    def convert_event_to_token_hierarchical(self, e: Event, **kwargs) -> Optional[str]:
+        """
+        Hierarchically optimized version of convert_event_to_token.
+        Uses single lookup in unified hierarchical mapping.
+        """
+        event_code = e.code
+        
+        # Single hierarchical lookup
+        if self.hierarchical_token_map and event_code in self.hierarchical_token_map:
+            mapping = self.hierarchical_token_map[event_code]
+            
+            # Handle UNK tokens
+            if mapping['token_info'] is None:
+                return mapping['target']  # Return UNK token directly
+                
+            # Use the resolved token info for processing
+            token_info = mapping['token_info']
+            effective_code = mapping['target']
+        else:
+            # Fall back to original method for codes not in hierarchical mapping
+            return self.convert_event_to_token_original(e, **kwargs)
+        
+        # Continue with existing logic for numerical/categorical processing
+        event_value = e.value
+        
+        # If numerical code...
+        if (
+            'numerical_range' in token_info
+            and event_value is not None
+            and (isinstance(event_value, float) or isinstance(event_value, int))
+        ):
+            for token_range in token_info['numerical_range']:
+                token = token_range['token']
+                unit = token_range['tokenization']['unit']
+                range_start = token_range['tokenization']['range_start']
+                range_end = token_range['tokenization']['range_end']
+                if range_start <= event_value <= range_end and e.unit == unit:
+                    return token
+            return None
+
+        # If textual code...
+        if (
+            'categorical' in token_info
+            and event_value is not None
+            and event_value != ''
+            and isinstance(event_value, str)
+        ):
+            for categorical_value in token_info['categorical']:
+                token = categorical_value['token']
+                value = categorical_value['tokenization']['value']
+                if event_value == value:
+                    return token
+            return None
+
+        # If code-only...
+        if 'code' in token_info:
+            return token_info['code'][0]['token']
+            
+        return None
+
+    def convert_event_to_token_original(self, e: Event, **kwargs) -> Optional[str]:
+        """Original convert_event_to_token method for backward compatibility"""
+        event_code = e.code
+        # If code isn't in vocab => check rollup mapping (ORIGINAL LOGIC)
+        if event_code not in self.code_2_token:
+            # Try hierarchical rollup mapping
+            if self.rollup_mapping is not None and event_code in self.rollup_mapping:
+                rollup_code = self.rollup_mapping[event_code]
+                if rollup_code in self.code_2_token:
+                    # Use the rollup target code instead
+                    event_code = rollup_code
+                else:
+                    # Rollup target not in vocabulary either
+                    return None
+            else:
+                # No rollup mapping available
+                return None
+        
+        # Continue with original tokenization logic
         event_value = e.value
         # If numerical code...
         if (
@@ -532,19 +690,29 @@ class CookbookTokenizer(BaseCodeTokenizer):
             for categorical_value in self.code_2_token[event_code]['categorical']:
                 assert 'token' in categorical_value, f"ERROR - Missing 'token' for code={event_code},type=categorical in self.code_2_token: {self.code_2_token[event_code]['categorical']}"
                 assert 'tokenization' in categorical_value, f"ERROR - Missing 'tokenization' for code={event_code},type=categorical in self.code_2_token: {self.code_2_token[event_code]['categorical']}"
-                if event_value in categorical_value['tokenization']['categories']:
-                    token: str = categorical_value['token']
+                token: str = categorical_value['token']
+                value: str = categorical_value['tokenization']['value']
+                if event_value == value:
                     return token
             return None
 
-        # If just vanilla code...
-        if (
-            'code' in self.code_2_token[event_code] # `code` is a valid type for this code
-        ):
-            token: str = self.code_2_token[event_code]['code'][0]['token']
-            return token
-
+        # If code-only (categorical/numerical is not specified)...
+        if 'code' in self.code_2_token[event_code]:
+            return self.code_2_token[event_code]['code'][0]['token']
+            
         return None
+
+    def convert_event_to_token(self, e: Event, **kwargs) -> Optional[str]:
+        """
+        Convert event to token using hierarchical mapping if available.
+        Falls back to original method if hierarchical mapping is not built.
+        """
+        # Use hierarchical optimization if available
+        use_hierarchical = kwargs.get('use_hierarchical', True)
+        if use_hierarchical and self.hierarchical_token_map is not None:
+            return self.convert_event_to_token_hierarchical(e, **kwargs)
+        else:
+            return self.convert_event_to_token_original(e, **kwargs)
     
     def convert_events_to_tokens(self, events: List[Event], **kwargs) -> List[str]:
         tokens: List[str] = []
@@ -613,6 +781,178 @@ class CookbookTokenizer(BaseCodeTokenizer):
                     tokens.append(token)
         
         return tokens
+
+
+class HierarchicalCookbookTokenizer(CookbookTokenizer):
+    """
+    Optimized CookbookTokenizer that uses hierarchical mappings and caching 
+    for improved performance with large vocabularies and rollup mappings.
+    """
+    
+    def __init__(self, path_to_tokenizer_config: str, metadata: Optional[Dict[str, Any]] = None):
+        # Initialize the parent class first
+        super().__init__(path_to_tokenizer_config, metadata)
+        
+        # Add hierarchical-specific optimizations
+        self._setup_hierarchical_cache()
+        self._cache_stats = {
+            'hits': 0,
+            'misses': 0,
+            'hierarchical_lookups': 0,
+            'original_lookups': 0
+        }
+        
+    def _setup_hierarchical_cache(self):
+        """Set up LRU cache for frequently accessed codes"""
+        from functools import lru_cache
+        
+        # Create cached version of token lookup
+        @lru_cache(maxsize=10000)
+        def _cached_hierarchical_lookup(code: str) -> tuple:
+            """Cached hierarchical lookup that returns immutable data"""
+            if self.hierarchical_token_map and code in self.hierarchical_token_map:
+                mapping = self.hierarchical_token_map[code]
+                return (
+                    mapping['target'], 
+                    mapping['level'],
+                    True  # Found in hierarchical mapping
+                )
+            return (None, None, False)  # Not found
+            
+        self._cached_hierarchical_lookup = _cached_hierarchical_lookup
+        
+    def convert_event_to_token(self, e: Event, **kwargs) -> Optional[str]:
+        """
+        Hierarchically optimized event to token conversion with caching.
+        """
+        event_code = e.code
+        
+        # Use cached hierarchical lookup
+        target_code, level, found = self._cached_hierarchical_lookup(event_code)
+        
+        if found:
+            self._cache_stats['hierarchical_lookups'] += 1
+            
+            # Handle UNK tokens directly
+            if target_code and target_code.startswith('[UNK'):
+                return target_code
+                
+            # Use target code for token resolution
+            if target_code and target_code in self.code_2_token:
+                effective_code = target_code
+                token_info = self.code_2_token[target_code]
+            else:
+                return None
+        else:
+            # Fall back to original lookup for codes not in hierarchical mapping
+            self._cache_stats['original_lookups'] += 1
+            if event_code not in self.code_2_token:
+                return None
+            effective_code = event_code
+            token_info = self.code_2_token[event_code]
+        
+        # Continue with optimized tokenization logic
+        return self._resolve_token_from_info(e, effective_code, token_info)
+        
+    def _resolve_token_from_info(self, e: Event, effective_code: str, token_info: dict) -> Optional[str]:
+        """Resolve final token from token info structure"""
+        event_value = e.value
+        
+        # If numerical code...
+        if (
+            'numerical_range' in token_info
+            and event_value is not None
+            and (isinstance(event_value, float) or isinstance(event_value, int))
+        ):
+            for token_range in token_info['numerical_range']:
+                token = token_range['token']
+                unit = token_range['tokenization']['unit']
+                range_start = token_range['tokenization']['range_start']
+                range_end = token_range['tokenization']['range_end']
+                if range_start <= event_value <= range_end and e.unit == unit:
+                    return token
+            return None
+
+        # If textual code...
+        if (
+            'categorical' in token_info
+            and event_value is not None
+            and event_value != ''
+            and isinstance(event_value, str)
+        ):
+            for categorical_value in token_info['categorical']:
+                token = categorical_value['token']
+                value = categorical_value['tokenization']['value']
+                if event_value == value:
+                    return token
+            return None
+
+        # If code-only...
+        if 'code' in token_info:
+            return token_info['code'][0]['token']
+            
+        return None
+        
+    def warm_hierarchical_cache(self, common_codes: List[str]) -> None:
+        """
+        Pre-populate cache with frequently used codes.
+        
+        Args:
+            common_codes: List of codes to pre-cache, ordered by frequency
+        """
+        from tqdm import tqdm
+        
+        print(f"Warming hierarchical cache with {len(common_codes)} common codes...")
+        
+        warmed = 0
+        for code in tqdm(common_codes, desc="Cache warming", leave=False):
+            # Access the code to populate cache
+            _ = self._cached_hierarchical_lookup(code)
+            warmed += 1
+            
+        print(f"✅ Warmed cache with {warmed:,} codes")
+        
+    def get_cache_stats(self) -> dict:
+        """Get current cache performance statistics"""
+        cache_info = self._cached_hierarchical_lookup.cache_info()
+        
+        total_lookups = self._cache_stats['hierarchical_lookups'] + self._cache_stats['original_lookups']
+        hierarchical_rate = (self._cache_stats['hierarchical_lookups'] / total_lookups * 100) if total_lookups > 0 else 0
+        
+        return {
+            'cache_hits': cache_info.hits,
+            'cache_misses': cache_info.misses,
+            'cache_hit_rate': (cache_info.hits / (cache_info.hits + cache_info.misses) * 100) if (cache_info.hits + cache_info.misses) > 0 else 0,
+            'cache_size': cache_info.currsize,
+            'cache_max_size': cache_info.maxsize,
+            'hierarchical_lookups': self._cache_stats['hierarchical_lookups'],
+            'original_lookups': self._cache_stats['original_lookups'],
+            'hierarchical_rate': hierarchical_rate,
+            'total_lookups': total_lookups
+        }
+        
+    def print_cache_stats(self) -> None:
+        """Print current cache performance statistics"""
+        stats = self.get_cache_stats()
+        print("📊 Hierarchical Tokenizer Cache Statistics:")
+        print(f"   • Cache hits: {stats['cache_hits']:,} ({stats['cache_hit_rate']:.1f}%)")
+        print(f"   • Cache misses: {stats['cache_misses']:,}")
+        print(f"   • Cache utilization: {stats['cache_size']:,}/{stats['cache_max_size']:,}")
+        print(f"   • Hierarchical lookups: {stats['hierarchical_lookups']:,} ({stats['hierarchical_rate']:.1f}%)")
+        print(f"   • Original lookups: {stats['original_lookups']:,}")
+        print(f"   • Total lookups: {stats['total_lookups']:,}")
+        
+    def clear_cache(self) -> None:
+        """Clear the hierarchical lookup cache"""
+        self._cached_hierarchical_lookup.cache_clear()
+        self._cache_stats = {
+            'hits': 0,
+            'misses': 0,
+            'hierarchical_lookups': 0,
+            'original_lookups': 0
+        }
+        print("✅ Hierarchical cache cleared")
+
 
 class CLMBRTokenizer(BaseCodeTokenizer):
     def __init__(self, path_to_tokenizer_config: str) -> None:

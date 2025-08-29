@@ -204,7 +204,7 @@ class AllTokensFEMRDataset(FEMRDataset):
         self.max_length: int = max_length # data.dataloader.max_length -- max length of a single sequence
 
         # Number of tokens per patient timeline
-        self.seq_length_per_patient: List[int] = tokenizer.get_seq_length_per_patient(self, n_procs=5)
+        self.seq_length_per_patient: List[int] = tokenizer.get_seq_length_per_patient(self, n_procs=max(1, os.cpu_count() - 1))
         # Number of unique examples that will be extracted per patient by truncating their timeline to `max_length` tokens
         self.n_examples_per_patient: List[int] = [ int(np.ceil(seq_length / max_length)) for seq_length in self.seq_length_per_patient ]
 
