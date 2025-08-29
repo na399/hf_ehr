@@ -1,0 +1,6 @@
+# @package _global_
+
+data:
+  tokenizer:
+    name: CLMBRTokenizer
+    path_to_config: ./cache/tokenizers/clmbr_synpuf100k/tokenizer_config.json

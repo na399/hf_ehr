@@ -707,7 +707,7 @@ dependencies = [
     { name = "mamba-ssm" },
     { name = "matplotlib" },
     { name = "meds" },
-    { name = "meds-etl" },
+    { name = "meds-etl", extra = ["cpp"] },
     { name = "meds-reader" },
     { name = "mlflow" },
     { name = "numpy" },
@@ -745,7 +745,7 @@ requires-dist = [
     { name = "mamba-ssm", specifier = ">=2.2.5" },
     { name = "matplotlib", specifier = "==3.9.2" },
     { name = "meds", specifier = "==0.3.3" },
-    { name = "meds-etl", specifier = "==0.3.8" },
+    { name = "meds-etl", extras = ["cpp"], specifier = "==0.3.8" },
     { name = "meds-reader", specifier = "==0.1.9" },
     { name = "mlflow", specifier = "==2.11.1" },
     { name = "numpy", specifier = "==1.26.0" },
@@ -1189,6 +1189,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d2/5a/1c412f2df3ac7211722e41655e580a718f21fe6e913a53970448b694c829/meds_etl-0.3.8.tar.gz", hash = "sha256:0c4bc649bb086adb9e2829e4b9be4ecd66dfa93a41536844ba18ffb903c09841", size = 120692, upload-time = "2024-10-11T11:03:22.886Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bf/f9/4a9c8ecb53fa31e6553dc4fea88ec3c114f66f66726fea8417a6301f6b04/meds_etl-0.3.8-py3-none-any.whl", hash = "sha256:c70ef045a2afede8117b0a03004f2974530f3ad3ea5d9bd6cff37c143db4c459", size = 118005, upload-time = "2024-10-11T11:03:21.484Z" },
+]
+
+[package.optional-dependencies]
+cpp = [
+    { name = "meds-etl-cpp" },
+]
+
+[[package]]
+name = "meds-etl-cpp"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f7/16/9d42eaf6bf3cacd22748cf5a2478f593623e29174c3f0a1beea953420a75/meds_etl_cpp-0.3.2.tar.gz", hash = "sha256:38e4aad92716ca51bb90432f08dcf26e632bd572ccc92b3fa17e91cb5bd4d86c", size = 27157, upload-time = "2024-08-16T13:27:08.678Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8b/33/67904064b42f5f93793855847f2b3dd8e33f10b7f773c5c0ad0cc7ac3eba/meds_etl_cpp-0.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:80aec40c3cd1e9f6b459b866abe61afaa4b3250f3cbb0cf0d49bf7e6309522eb", size = 4746664, upload-time = "2024-08-16T13:27:00.869Z" },
 ]
 
 [[package]]

@@ -1,0 +1,6 @@
+# @package _global_
+
+data:
+  tokenizer:
+    name: CookbookTokenizer
+    path_to_config: ./cache/tokenizers/cookbook_synpuf100k/tokenizer_config.json

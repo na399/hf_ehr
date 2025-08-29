@@ -1,0 +1,8 @@
+# @package _global_
+
+data:
+  dataset:
+    name: MEDSDataset
+    path_to_meds_reader_extract: ./data/synpuf100k_meds_reader
+    is_debug: false
+    seed: 42
