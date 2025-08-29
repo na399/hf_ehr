@@ -20,6 +20,7 @@ from hf_ehr.config import (
     save_tokenizer_config_to_path,
     TokenizerConfigEntry,
 )
+from hf_ehr.utils import get_tokenizer_info_from_config_yaml
 import yaml
 
 def parse_args() -> argparse.Namespace:

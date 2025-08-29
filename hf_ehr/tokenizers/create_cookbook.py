@@ -48,13 +48,19 @@ def check_remove_codes_belonging_to_vocabs(tokenizer_config, excluded_vocabs):
 
 def check_add_categorical_codes(tokenizer_config):
     categorical_codes = [entry for entry in tokenizer_config if entry.type == 'categorical']
-    assert len(categorical_codes) > 0, "No categorical codes were added."
+    if len(categorical_codes) == 0:
+        print("Note: No categorical codes found in dataset (code-only data)")
+        return False
     print(f"Check passed: {len(categorical_codes)} categorical codes added.")
+    return True
 
 def check_add_numerical_range_codes(tokenizer_config):
     numerical_ranges = [entry for entry in tokenizer_config if entry.type == 'numerical_range']
-    assert len(numerical_ranges) > 0, "No numerical range codes were added."
+    if len(numerical_ranges) == 0:
+        print("Note: No numerical range codes found in dataset (code-only data)")
+        return False
     print(f"Check passed: {len(numerical_ranges)} numerical range codes added.")
+    return True
 
 def check_add_occurrence_count_to_codes(tokenizer_config):
     codes_with_counts = [entry for entry in tokenizer_config if any(stat.type == 'count_occurrences' for stat in getattr(entry, 'stats', []))]
@@ -163,15 +169,27 @@ def main():
     tokenizer_config, _ = load_tokenizer_config_and_metadata_from_path(path_to_tokenizer_config)
     check_add_unique_codes(tokenizer_config)
     
+    # Try to add categorical codes (may not exist in all datasets)
     # With `n_procs=5`, should take ~XXXX mins
     call_func_with_logging(add_categorical_codes, 'add_categorical_codes', path_to_tokenizer_config, pids=pids, n_procs=args.n_procs, path_to_cache_dir=args.path_to_cache_dir, path_to_extract=path_to_extract, dataset_cls=dataset_cls)
     tokenizer_config, _ = load_tokenizer_config_and_metadata_from_path(path_to_tokenizer_config)
-    check_add_categorical_codes(tokenizer_config)
+    has_categorical = check_add_categorical_codes(tokenizer_config)
     
+    # Try to add numerical range codes (may not exist in all datasets)
     # With `n_procs=5`, should take ~XXXX mins
     call_func_with_logging(add_numerical_range_codes, 'add_numerical_range_codes', path_to_tokenizer_config, pids=pids, N=n_buckets_for_numerical_range_codes, path_to_cache_dir=args.path_to_cache_dir, path_to_extract=path_to_extract, dataset_cls=dataset_cls, n_procs=args.n_procs)
     tokenizer_config, _ = load_tokenizer_config_and_metadata_from_path(path_to_tokenizer_config)
-    check_add_numerical_range_codes(tokenizer_config)
+    has_numerical = check_add_numerical_range_codes(tokenizer_config)
+    
+    # Report data types found
+    if not has_categorical and not has_numerical:
+        print("Note: Dataset appears to be code-only (no categorical or numerical values found)")
+    elif has_categorical and not has_numerical:
+        print("Note: Dataset has categorical values but no numerical values")
+    elif not has_categorical and has_numerical:
+        print("Note: Dataset has numerical values but no categorical values")
+    else:
+        print("Note: Dataset has both categorical and numerical values")
     
     # With `n_procs=5`, should take ~XXXX mins
     call_func_with_logging(remove_codes_belonging_to_vocabs, 'remove_codes_belonging_to_vocabs', path_to_tokenizer_config, excluded_vocabs=excluded_vocabs, n_procs=args.n_procs)
