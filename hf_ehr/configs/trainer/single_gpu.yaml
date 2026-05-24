@@ -2,7 +2,7 @@
 
 trainer:
   devices: [0]
-  distributed_backend: ddp
+  distributed_backend: auto
 
 data:
   dataloader:

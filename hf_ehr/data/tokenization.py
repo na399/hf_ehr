@@ -18,6 +18,39 @@ class TokenizerSeqLengthPerPatientCache(TypedDict):
     dataset_metadata: Dict[str, Any]
     seq_lengths: List[int]
 
+
+_SEQ_LENGTH_TOKENIZER = None
+_SEQ_LENGTH_DATASET = None
+
+
+def _dataset_from_metadata(dataset_metadata: Dict[str, Any]):
+    from hf_ehr.data.datasets import FEMRDataset, MEDSDataset
+
+    dataset_cls = MEDSDataset if dataset_metadata.get('cls') == 'MEDSDataset' else FEMRDataset
+    init_metadata = {
+        key: val
+        for key, val in dataset_metadata.items()
+        if key not in ['cls', 'tokenizer_metadata', 'max_length']
+    }
+    return dataset_cls(**init_metadata)
+
+
+def _init_seq_length_worker(tokenizer, dataset_metadata: Dict[str, Any]) -> None:
+    global _SEQ_LENGTH_TOKENIZER, _SEQ_LENGTH_DATASET
+    _SEQ_LENGTH_TOKENIZER = tokenizer
+    _SEQ_LENGTH_DATASET = _dataset_from_metadata(dataset_metadata)
+
+
+def _get_seq_length_worker(args: Tuple[int, int]) -> List[Tuple[int, int]]:
+    if _SEQ_LENGTH_TOKENIZER is None or _SEQ_LENGTH_DATASET is None:
+        raise RuntimeError('Sequence-length worker was not initialized')
+    start_idx, end_idx = args
+    results: List[Tuple[int, int]] = []
+    for idx in range(start_idx, end_idx):
+        events: List[Event] = _SEQ_LENGTH_DATASET.__getitem__(idx)[1]
+        results.append((idx, _SEQ_LENGTH_TOKENIZER.get_seq_length_for_events(events)))
+    return results
+
 def filter_tokenizer_config(tokenizer_config: List[TokenizerConfigEntry],
                             excluded_vocabs: Optional[Set[str]] = None,
                             min_code_occurrence_count: Optional[int] = None,
@@ -86,6 +119,7 @@ class BaseTokenizer(PreTrainedTokenizer):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         assert self.path_to_tokenizer_config is not None, f"ERROR - `self.path_to_tokenizer_config` must be set on `init()`"
+        self.path_to_tokenizer_cache_dir = getattr(self, 'path_to_tokenizer_cache_dir', None)
         assert hasattr(self, 'metadata'), f"ERROR - `self.metadata` must be set on `init()`"
         # Convert DictConfig to a regular dictionary if necessary
         if isinstance(self.metadata, DictConfig):
@@ -171,7 +205,7 @@ class BaseTokenizer(PreTrainedTokenizer):
             This method returns the path to the folder containing the exact version that matches `self.metadata`.
             If no folder exists for this version, then creates a new folder and return that.
         """
-        path_to_tokenizer_dir: str = os.path.dirname(self.path_to_tokenizer_config)
+        path_to_tokenizer_dir: str = self.path_to_tokenizer_cache_dir or os.path.dirname(self.path_to_tokenizer_config)
         path_to_versions_dir: str = os.path.join(path_to_tokenizer_dir, 'versions/')
         os.makedirs(path_to_versions_dir, exist_ok=True)
         
@@ -222,28 +256,35 @@ class BaseTokenizer(PreTrainedTokenizer):
         print(f"Creating new folder for this dataset of this version of the tokenizer at `{path_to_new_folder}` with metadata={dataset.metadata}")
         return path_to_new_folder
 
-    def get_seq_length(self, args: Tuple['Dataset', int, int]) -> List[Tuple[int, int]]:
-        """Given a dataset and a range of indices, return the sequence length of each patient in that range"""
-        from hf_ehr.data.datasets import FEMRDataset, MEDSDataset
-        dataset_metadata, start_idx, end_idx = args # type is: FEMRDataset, int, int
-        
-        dataset_cls = None
-        if dataset_metadata.get('cls') == 'MEDSDataset':
-            dataset_cls = MEDSDataset
-        else:
-            dataset_cls = FEMRDataset
+    def _write_seq_length_cache(self, path_to_cache_file: str, dataset, seq_lengths: List[int]) -> None:
+        cache_payload = { 
+            'timestamp' : datetime.datetime.now().isoformat(), 
+            'tokenizer_metadata' : self.metadata, 
+            'dataset_metadata' : dataset.metadata, 
+            'seq_lengths' : seq_lengths 
+        }
+        path_to_tmp_cache_file = f"{path_to_cache_file}.tmp"
+        with open(path_to_tmp_cache_file, 'w') as f:
+            json.dump(cache_payload, f, indent=2)
+        os.replace(path_to_tmp_cache_file, path_to_cache_file)
 
-        # remove extraneous keys so that we can init FEMRDataset() without errors
-        dataset_metadata = { key: val for key, val in dataset_metadata.items() if key not in [ 'cls', 'tokenizer_metadata', 'max_length' ] }
-        
-        dataset = dataset_cls(**dataset_metadata)
+    def maybe_get_seq_length_per_patient_fast(self, dataset) -> Optional[List[int]]:
+        return None
+
+    def get_seq_length_for_events(self, events: List[Event]) -> int:
+        return len(self.__call__(events)['input_ids'][0])
+
+    def get_seq_length(self, args: Tuple['Dataset', int, int]) -> List[Tuple[int, int]]:
+        """Given dataset metadata and a range of indices, return sequence lengths."""
+        dataset_metadata, start_idx, end_idx = args
+        dataset = _dataset_from_metadata(dataset_metadata)
         results: List[Tuple[int, int]] = []
         for idx in range(start_idx, end_idx):
             events: List[Event] = dataset.__getitem__(idx)[1]
-            results.append((idx, len(self.__call__(events)['input_ids'][0])))
+            results.append((idx, self.get_seq_length_for_events(events)))
         return results
 
-    def get_seq_length_per_patient(self, dataset, n_procs: int = 5, is_force_refresh: bool = False) -> List[int]:
+    def get_seq_length_per_patient(self, dataset, n_procs: int = 5, is_force_refresh: bool = False, chunk_size: int = 5_000) -> List[int]:
         """
             Fetch the sequence length of every patient in `dataset`, save to cache, and return the list of lengths.
             If cache exists, then load from cache (unless `is_force_refresh` is set to TRUE).
@@ -271,24 +312,41 @@ class BaseTokenizer(PreTrainedTokenizer):
             else:
                 print(f"No `seq_length_per_patient.json` found at `{path_to_cache_file}` for split=`{dataset.split}`. Generating `seq_length_per_patient.json` now...")
 
-        # Calculate seq lengths in parallel
-        n_procs = 1 # TODO - remove
+        fast_seq_lengths = self.maybe_get_seq_length_per_patient_fast(dataset)
+        if fast_seq_lengths is not None:
+            self._write_seq_length_cache(path_to_cache_file, dataset, fast_seq_lengths)
+            return fast_seq_lengths
+
+        # Calculate seq lengths in parallel. Keep one dataset handle per worker; opening
+        # MEDSReader/FEMR repeatedly per chunk dominates runtime on large datasets.
+        n_procs = max(1, int(n_procs))
+        chunk_size = max(1, int(chunk_size))
+        tasks: List[Tuple[int, int]] = [
+            (start, min(dataset.get_n_patients(), start + chunk_size))
+            for start in range(0, dataset.get_n_patients(), chunk_size)
+        ]
         if n_procs == 1:
-            tasks: List[Tuple] = [(dataset.metadata, start, min(dataset.get_n_patients(), start + 1),) for start in range(0, dataset.get_n_patients(), 1) ]
-            results: List[List[Tuple[int,int]]] = [ self.get_seq_length(t) for t in tqdm(tasks, total=len(tasks), desc=f"tokenizer.get_seq_length_per_patient() | n_procs={n_procs}") ]
+            results = []
+            for start_idx, end_idx in tqdm(tasks, total=len(tasks), desc=f"tokenizer.get_seq_length_per_patient() | n_procs={n_procs}"):
+                chunk_results: List[Tuple[int, int]] = []
+                for idx in range(start_idx, end_idx):
+                    events: List[Event] = dataset.__getitem__(idx)[1]
+                    chunk_results.append((idx, self.get_seq_length_for_events(events)))
+                results.append(chunk_results)
         else:
-            chunk_size: int = 5_000
-            tasks: List[Tuple] = [(dataset.metadata, start, min(dataset.get_n_patients(), start + chunk_size),) for start in range(0, dataset.get_n_patients(), chunk_size) ]
-            with multiprocessing.Pool(processes=n_procs) as pool:
-                results: List[List[Tuple[int,int]]] = list(tqdm(pool.imap_unordered(self.get_seq_length, tasks), total=len(tasks), desc=f"tokenizer.get_seq_length_per_patient() | n_procs={n_procs}"))
+            with multiprocessing.Pool(
+                processes=n_procs,
+                initializer=_init_seq_length_worker,
+                initargs=(self, dataset.metadata),
+            ) as pool:
+                results: List[List[Tuple[int,int]]] = list(tqdm(
+                    pool.imap_unordered(_get_seq_length_worker, tasks),
+                    total=len(tasks),
+                    desc=f"tokenizer.get_seq_length_per_patient() | n_procs={n_procs}",
+                ))
         flattened_results: List[Tuple[int, int]] = [ x for sublist in results for x in sublist ] # type: ignore
         seq_lengths: List[int] = [ x[1] for x in sorted(flattened_results, key=lambda x: x[0]) ]
-        json.dump({ 
-            'timestamp' : datetime.datetime.now().isoformat(), 
-            'tokenizer_metadata' : self.metadata, 
-            'dataset_metadata' : dataset.metadata, 
-            'seq_lengths' : seq_lengths 
-        }, open(path_to_cache_file, 'w'), indent=2)
+        self._write_seq_length_cache(path_to_cache_file, dataset, seq_lengths)
         return seq_lengths
 
 class BaseCodeTokenizer(BaseTokenizer):
@@ -314,6 +372,55 @@ class BaseCodeTokenizer(BaseTokenizer):
         )
         self.add_tokens(self.non_special_tokens)
         self.clean_up_tokenization_spaces = False # to avoid HuggingFace deprecation warning
+
+    def _can_count_meds_seq_lengths_from_codes(self) -> bool:
+        return all(entry.type == 'code' for entry in self.tokenizer_config)
+
+    def _get_meds_data_dir(self, path_to_meds_reader_extract: str) -> Optional[str]:
+        candidates = [path_to_meds_reader_extract]
+        if path_to_meds_reader_extract.endswith('_reader'):
+            candidates.append(path_to_meds_reader_extract[:-len('_reader')])
+        for candidate in candidates:
+            if os.path.isdir(os.path.join(candidate, 'data')):
+                return candidate
+        return None
+
+    def maybe_get_seq_length_per_patient_fast(self, dataset) -> Optional[List[int]]:
+        if dataset.metadata.get('cls') != 'MEDSDataset' or not self._can_count_meds_seq_lengths_from_codes():
+            return None
+
+        path_to_meds_reader_extract = dataset.metadata.get('path_to_meds_reader_extract')
+        if not path_to_meds_reader_extract:
+            return None
+        path_to_meds_dir = self._get_meds_data_dir(path_to_meds_reader_extract)
+        if path_to_meds_dir is None:
+            return None
+
+        split_to_dir = {'train': 'train', 'val': 'tuning', 'test': 'held_out'}
+        split_dir_name = split_to_dir.get(dataset.split)
+        if split_dir_name is None:
+            return None
+        path_to_split_dir = os.path.join(path_to_meds_dir, 'data', split_dir_name)
+        if not os.path.isdir(path_to_split_dir):
+            return None
+
+        import polars as pl
+
+        pids = [int(pid[0]) if hasattr(pid, '__len__') and not isinstance(pid, (str, bytes)) else int(pid) for pid in dataset.get_pids()]
+        if not pids:
+            return []
+        vocab_codes = [entry.code for entry in self.tokenizer_config]
+        counts = (
+            pl.scan_parquet(os.path.join(path_to_split_dir, '*.parquet'))
+            .select(['subject_id', 'code'])
+            .filter(pl.col('subject_id').is_in(pids))
+            .filter(pl.col('code').is_in(vocab_codes))
+            .group_by('subject_id')
+            .len()
+            .collect()
+        )
+        counts_by_pid = dict(zip(counts['subject_id'].to_list(), counts['len'].to_list()))
+        return [max(1, int(counts_by_pid.get(pid, 0))) for pid in pids]
     
     def __call__(self, 
                  batch_of_events: Union[List[Event], List[List[Event]]],
@@ -384,6 +491,10 @@ class BaseCodeTokenizer(BaseTokenizer):
 
         return tokenized_batch
 
+    def get_seq_length_for_events(self, events: List[Event]) -> int:
+        tokens = self.convert_events_to_tokens(events)
+        return max(1, len(tokens))
+
     """Mandatory overwrites of base class"""
     @property
     def vocab_size(self) -> int:
@@ -418,8 +529,10 @@ class CookbookTokenizer(BaseCodeTokenizer):
     """
     def __init__(self, 
                  path_to_tokenizer_config: str, 
-                 metadata: Optional[Dict[str, Any]] = None) -> None:
+                 metadata: Optional[Dict[str, Any]] = None,
+                 path_to_tokenizer_cache_dir: Optional[str] = None) -> None:
         self.path_to_tokenizer_config: str = path_to_tokenizer_config
+        self.path_to_tokenizer_cache_dir = path_to_tokenizer_cache_dir
         self.tokenizer_config: List[TokenizerConfigEntry] = load_tokenizer_config_from_path(path_to_tokenizer_config)
         
         # Set metadata
@@ -602,8 +715,9 @@ class CookbookTokenizer(BaseCodeTokenizer):
         return tokens
 
 class CLMBRTokenizer(BaseCodeTokenizer):
-    def __init__(self, path_to_tokenizer_config: str) -> None:
+    def __init__(self, path_to_tokenizer_config: str, path_to_tokenizer_cache_dir: Optional[str] = None) -> None:
         self.path_to_tokenizer_config: str = path_to_tokenizer_config
+        self.path_to_tokenizer_cache_dir = path_to_tokenizer_cache_dir
         self.tokenizer_config: List[TokenizerConfigEntry] = load_tokenizer_config_from_path(path_to_tokenizer_config)
         
         # Set metadata        
@@ -680,8 +794,9 @@ class CLMBRTokenizer(BaseCodeTokenizer):
 
 
 class CEHRTokenizer(BaseCodeTokenizer):
-    def __init__(self, path_to_tokenizer_config: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, path_to_tokenizer_config: str, metadata: Optional[Dict[str, Any]] = None, path_to_tokenizer_cache_dir: Optional[str] = None) -> None:
         self.path_to_tokenizer_config: str = path_to_tokenizer_config
+        self.path_to_tokenizer_cache_dir = path_to_tokenizer_cache_dir
         self.tokenizer_config: List[TokenizerConfigEntry] = load_tokenizer_config_from_path(path_to_tokenizer_config)
         
         # Set metadata        
@@ -851,10 +966,12 @@ class DescTokenizer(BaseTokenizer):
     """
     def __init__(self, 
                  path_to_tokenizer_config: str, 
-                 metadata: Optional[Dict[str, Any]] = None) -> None:
+                 metadata: Optional[Dict[str, Any]] = None,
+                 path_to_tokenizer_cache_dir: Optional[str] = None) -> None:
         assert metadata is not None, f"ERROR - `metadata` must be provided, but got {metadata}"
         assert 'desc_emb_tokenizer' in metadata, f"ERROR - `metadata` must contain a 'desc_emb_tokenizer' key, but got {metadata}"
         self.path_to_tokenizer_config: str = path_to_tokenizer_config
+        self.path_to_tokenizer_cache_dir = path_to_tokenizer_cache_dir
         self.tokenizer_config: List[TokenizerConfigEntry] = load_tokenizer_config_from_path(path_to_tokenizer_config)
         
         # Set metadata

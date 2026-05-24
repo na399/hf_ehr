@@ -128,7 +128,8 @@ class BaseModel(L.LightningModule):
         else:
             nan_detected = torch.tensor([0.0], device=self.device)
 
-        dist.all_reduce(nan_detected, op=dist.ReduceOp.MAX)
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(nan_detected, op=dist.ReduceOp.MAX)
         if nan_detected.item() == 1:
             print("NaN detected in loss, skipping this batch across all processes.")
             return  # Skip this batch on all processes
@@ -184,7 +185,8 @@ class BaseModel(L.LightningModule):
                 self.trainer.train_dataloader.batch_sampler.sampler.set_epoch(self.trainer.current_epoch)
                 self.trainer.train_dataloader.batch_sampler.start_batch_idx = self.batch_idx if self.batch_idx > 0 else self.trainer.global_step
                 logger.success(f"We are resuming from a checkpoint that used `ApproxBatchSampler`, so set: `epoch={self.trainer.current_epoch}` and `start_batch_idx={self.trainer.train_dataloader.batch_sampler.start_batch_idx}`")
-        torch.distributed.barrier()
+        if dist.is_available() and dist.is_initialized():
+            torch.distributed.barrier()
 
     def on_validation_start(self):
         # When we restart validation, reset # of tokens that have gone into the val loss calculation to 0

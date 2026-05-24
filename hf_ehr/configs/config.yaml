@@ -2,7 +2,7 @@ main:
   # Training seed.
   seed: 1
   # Where outputs will be saved; If folder exists, then run will be resumed from this directory's `../ckpts/last.ckpt` file
-  path_to_output_dir: /share/pi/nigam/mwornow/hf_ehr/cache/runs/${now:%Y-%m-%d_%H-%M-%S}/
+  path_to_output_dir: ${oc.env:HF_EHR_OUTPUT_DIR,runs/${now:%Y-%m-%d_%H-%M-%S}}
   # If TRUE, then delete existing checkpoint and restart from scratch
   # If FALSE, then resume from the checkpoint in the file `last.ckpt` in `path_to_output_dir` (if exists)
   is_force_restart: False
@@ -15,22 +15,36 @@ hydra:
 
 callbacks:
   early_stopping:
+    # Validation metric to monitor for early stopping.
+    monitor: val/loss
+    # Minimum absolute improvement needed to reset early stopping patience.
+    min_delta: 0.01
     # If we want to min/max the monitored quantity.
     metric_mode: min
     # Number of epochs with no improvement after which training will be stopped.
-    patience: 3
+    patience: 2
   model_checkpointing:
-    # Save the top K best models according to val/loss. If -1, then save all models
+    # If TRUE, save a checkpoint before the first training batch. Useful for debugging resume paths, but storage-heavy.
+    save_start_checkpoint: False
+    # If TRUE, always keep a Lightning `last.ckpt` for resumability.
+    save_last_checkpoint: True
+    # If TRUE, save a persistent checkpoint at every epoch end. Storage-heavy for large models.
+    save_epoch_checkpoint: False
+    # If TRUE, save persistent step checkpoints using `every_n_train_steps`. Storage-heavy for long runs.
+    save_step_checkpoint: False
+    # If TRUE, omit optimizer/scheduler state from checkpoints. Smaller, but cannot resume training exactly.
+    save_weights_only: False
+    # Save the top K best models according to val/loss. If -1, then save all models; if 0, disable this callback.
     save_top_k_val_loss: 1
-    # Save the most recent K models. If -1, then save all models
-    save_most_recent_k: 1
+    # Save the most recent K models. If -1, then save all models; if 0, only `last.ckpt` is kept when save_last_checkpoint=True.
+    save_most_recent_k: 0
     # Save model every N global steps; if NULL, save after every epoch; overwrites previous model
     # useful for resuming training after a crash
     save_most_recent_every_n_train_steps: 10_000
     # Save model every N global steps; persists permanently
     every_n_train_steps: 50_000
     # Save model every N nonPAD training tokens seen; persists permanently; defaults to 500 million
-    every_n_train_nonPAD_tokens: 500_000_000
+    every_n_train_nonPAD_tokens: null
     # Save model every N FLOPs; defaults to 50 quadrillion FLOPs
     every_n_flops: null
     # If TRUE, then log validation metrics when saving model checkpoints for: every_n_train_nonPAD_tokens, every_n_flops
@@ -39,8 +53,10 @@ callbacks:
 data:
   dataset:
     # Path to FEMR extract
-    path_to_femr_extract: /share/pi/nigam/data/som-rit-phi-starr-prod.starr_omop_cdm5_deid_2023_02_08_extract_v8_no_notes
+    path_to_femr_extract: ${oc.env:HF_EHR_FEMR_EXTRACT,null}
     is_debug: False
+    # MEDSReader threads per dataset instance. Keep low when sequence length precompute already uses many processes.
+    reader_num_threads: 1
   dataloader:
     # To avoid changing the config file for each run, specify the mode and keep both batch_size and 
     # approx_batch_sampler
@@ -56,6 +72,12 @@ data:
       is_random_shuffle_within_buckets: True
     # Number of data loader workers to use.
     n_workers: 4
+    # Number of processes used to precompute sequence lengths for approx batching.
+    seq_length_n_procs: 5
+    # Number of patients per task for sequence-length precompute workers. Larger chunks reduce process IPC overhead.
+    seq_length_chunk_size: 5000
+    # Eval splits whose sequence lengths are precomputed for approx batching during fit. Add `test` before explicit test/eval runs.
+    precompute_splits: [val]
     # Max number of codes to feed into model at once per patient.
     max_length: 1024
     # If TRUE, then truncate patient timelines at random locations, rather than always doing right-hand side truncation.
@@ -64,16 +86,20 @@ data:
     is_use_rope: False
 
 trainer:
-  # Accumulated gradients runs K small batches of size `data.dataloader.batch_size` before doing a backwards pass.
+  # Accumulated gradients runs K small batches before an optimizer step.
+  # If set to "__PLACEHOLDER__", this is derived from target_tokens_per_update / max_tokens.
   accumulate_grad_batches: "__PLACEHOLDER__"
+  target_tokens_per_update: 65_536
   # Value for gradient clipping
   gradient_clip_value: 1.0
   # Whether to clip the gradients based on their 'norm' or 'value'
   gradient_clip_algorithm: norm
   # List of devices to run on
-  devices: 0,1,2,3
-  # Supports: dp, ddp, ddp2, fsdp, deepspeed
-  distributed_backend: ddp
+  devices: [0]
+  # Supports: dp, ddp, ddp2, fsdp, deepspeed, auto
+  distributed_backend: auto
+  # Precision passed to Lightning. `auto_bf16` uses bf16-mixed when CUDA supports bf16, else 16-mixed.
+  precision: auto_bf16
   # Limits training to a minimum number of epochs
   min_epochs: 1
   # Limits training to a max number number of epochs
@@ -112,7 +138,7 @@ logging:
     # Wandb run name (if NULL, then will use wandb's default random namep)
     name: null
     # Wandb entity name (i.e. name of wandb organization)
-    entity: ehr-fm
+    entity: na399-ai
     # Wandb project name
     project: hf_ehr
     # DEFAULT behavior (FALSE) is if resuming from a checkpoint, then resume the existing wandb run from the last step in that model's checkpoint

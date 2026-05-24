@@ -8,6 +8,7 @@ data:
     max_length: 1024
 
 model:
+  is_gradient_checkpointing: False
   config_kwargs:
     n_ctx: ${data.dataloader.max_length}
     n_positions: ${data.dataloader.max_length}

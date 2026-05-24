@@ -7,6 +7,19 @@ from hf_ehr.data.tokenization import BaseTokenizer, collate_femr_timelines
 from loguru import logger
 import numpy as np
 
+def get_eval_splits_for_dataloader(config: DictConfig) -> tuple[str, ...]:
+    splits = getattr(config.data.dataloader, 'precompute_splits', ('val',))
+    if splits is None:
+        return ()
+    if isinstance(splits, str):
+        splits = [x.strip() for x in splits.split(',') if x.strip()]
+    valid_splits = {'val', 'test'}
+    unknown_splits = set(splits) - valid_splits
+    if unknown_splits:
+        raise ValueError(f"Unknown eval splits for precompute_splits: {sorted(unknown_splits)}")
+    return tuple(splits)
+
+
 def load_dataloaders(config: DictConfig, 
                      datasets: Dict[str, BaseDataset], 
                      tokenizer: BaseTokenizer) -> Dict[str, DataLoader]:
@@ -22,6 +35,9 @@ def load_dataloaders(config: DictConfig,
             is_mlm = True  # MLM is typically associated with BERT
     mlm_prob: float = config.data.mlm_prob if is_mlm else 0.0
     n_workers: int = config.data.dataloader.n_workers
+    seq_length_n_procs: int = int(getattr(config.data.dataloader, 'seq_length_n_procs', 5))
+    seq_length_chunk_size: int = int(getattr(config.data.dataloader, 'seq_length_chunk_size', 5000))
+    eval_splits = get_eval_splits_for_dataloader(config)
     seed: int = config.main.seed
     n_replicas: int = len(config.trainer.devices)
     
@@ -37,20 +53,20 @@ def load_dataloaders(config: DictConfig,
         # Get sequence lengths for each example in dataset
         if dataset_name == 'FEMRDataset':
             # Each example in the dataset is a patient, so simply return the sequence length of each patient
-            train_idx_to_seq_length: List[int] = tokenizer.get_seq_length_per_patient(datasets['train'])
-            val_idx_to_seq_length: List[int] = tokenizer.get_seq_length_per_patient(datasets['val'])
-            test_idx_to_seq_length: List[int] = tokenizer.get_seq_length_per_patient(datasets['test'])
+            train_idx_to_seq_length: List[int] = tokenizer.get_seq_length_per_patient(datasets['train'], n_procs=seq_length_n_procs, chunk_size=seq_length_chunk_size)
+            val_idx_to_seq_length: Optional[List[int]] = tokenizer.get_seq_length_per_patient(datasets['val'], n_procs=seq_length_n_procs, chunk_size=seq_length_chunk_size) if 'val' in eval_splits else None
+            test_idx_to_seq_length: Optional[List[int]] = tokenizer.get_seq_length_per_patient(datasets['test'], n_procs=seq_length_n_procs, chunk_size=seq_length_chunk_size) if 'test' in eval_splits else None
         elif dataset_name == 'AllTokensFEMRDataset':
             # Each example in the dataset is a SUBSET of a patient, so return the sequence length of each example -- slightly trickier than FEMRDataset
             train_idx_to_seq_length: List[int] = datasets['train'].idx_to_seq_length
-            val_idx_to_seq_length: List[int] = datasets['val'].idx_to_seq_length
-            test_idx_to_seq_length: List[int] = datasets['test'].idx_to_seq_length
+            val_idx_to_seq_length: Optional[List[int]] = datasets['val'].idx_to_seq_length if 'val' in eval_splits else None
+            test_idx_to_seq_length: Optional[List[int]] = datasets['test'].idx_to_seq_length if 'test' in eval_splits else None
             is_random_shuffle_within_buckets = False # for more cache hits since we will repeatedly query the same patient for subsets of their timeline
             secondary_sort_key = [ x[0] for x in datasets['train'].idx_to_pidx_start_end ] # get patient id's to serve as a secondary sort key
         elif dataset_name == 'MEDSDataset':
-            train_idx_to_seq_length: List[int] = tokenizer.get_seq_length_per_patient(datasets['train'])
-            val_idx_to_seq_length: List[int] = tokenizer.get_seq_length_per_patient(datasets['val'])
-            test_idx_to_seq_length: List[int] = tokenizer.get_seq_length_per_patient(datasets['test'])
+            train_idx_to_seq_length: List[int] = tokenizer.get_seq_length_per_patient(datasets['train'], n_procs=seq_length_n_procs, chunk_size=seq_length_chunk_size)
+            val_idx_to_seq_length: Optional[List[int]] = tokenizer.get_seq_length_per_patient(datasets['val'], n_procs=seq_length_n_procs, chunk_size=seq_length_chunk_size) if 'val' in eval_splits else None
+            test_idx_to_seq_length: Optional[List[int]] = tokenizer.get_seq_length_per_patient(datasets['test'], n_procs=seq_length_n_procs, chunk_size=seq_length_chunk_size) if 'test' in eval_splits else None
         else:
             raise ValueError(f"Unknown dataset_name: {dataset_name}")
 
@@ -59,29 +75,39 @@ def load_dataloaders(config: DictConfig,
         train_batch_sampler = ApproxBatchSampler( train_idx_to_seq_length, train_sort_sampler, max_length, batch_max_tokens, )
         _ = len(train_batch_sampler)
         train_n_samples_per_batch = train_batch_sampler.n_samples_per_batch
-        val_sort_sampler = SortishSampler( val_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_replicas=1, rank=0)
-        val_batch_sampler = ApproxBatchSampler( val_idx_to_seq_length, val_sort_sampler, max_length, batch_max_tokens, )
-        _ = len(val_batch_sampler)
-        val_n_samples_per_batch = val_batch_sampler.n_samples_per_batch
-        test_sort_sampler = SortishSampler( test_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_replicas=1, rank=0)
-        test_batch_sampler = ApproxBatchSampler( test_idx_to_seq_length, test_sort_sampler, max_length, batch_max_tokens, )
-        _ = len(test_batch_sampler)
-        test_n_samples_per_batch = test_batch_sampler.n_samples_per_batch
+        val_n_samples_per_batch = None
+        if val_idx_to_seq_length is not None:
+            val_sort_sampler = SortishSampler( val_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_replicas=1, rank=0)
+            val_batch_sampler = ApproxBatchSampler( val_idx_to_seq_length, val_sort_sampler, max_length, batch_max_tokens, )
+            _ = len(val_batch_sampler)
+            val_n_samples_per_batch = val_batch_sampler.n_samples_per_batch
+        test_n_samples_per_batch = None
+        if test_idx_to_seq_length is not None:
+            test_sort_sampler = SortishSampler( test_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_replicas=1, rank=0)
+            test_batch_sampler = ApproxBatchSampler( test_idx_to_seq_length, test_sort_sampler, max_length, batch_max_tokens, )
+            _ = len(test_batch_sampler)
+            test_n_samples_per_batch = test_batch_sampler.n_samples_per_batch
 
         # Train -- randomize (if desired) within/across batch sequence ordering
-        print('=>', len(train_n_samples_per_batch), len(val_n_samples_per_batch), len(test_n_samples_per_batch))
+        logger.info(f"Approx batch counts: train={len(train_n_samples_per_batch)} val={len(val_n_samples_per_batch) if val_n_samples_per_batch is not None else 'batch'} test={len(test_n_samples_per_batch) if test_n_samples_per_batch is not None else 'batch'}")
         train_sort_sampler = SortishSampler(train_idx_to_seq_length, train_bucket_size, is_random_shuffle_across_buckets=is_random_shuffle_across_buckets, is_random_shuffle_within_buckets=is_random_shuffle_within_buckets, secondary_sort_key=secondary_sort_key, n_samples_per_batch=train_n_samples_per_batch, n_replicas=n_replicas)
         train_batch_sampler = ApproxBatchSampler( train_idx_to_seq_length, train_sort_sampler, max_length, batch_max_tokens, )
         train_batch_sampler_kwargs = { 'batch_sampler' : train_batch_sampler, }
         # For val / test -- always sort by length, then execute in fixed sequence
         ## Val
-        val_sort_sampler = SortishSampler( val_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_samples_per_batch=val_n_samples_per_batch, n_replicas=n_replicas)
-        val_batch_sampler = ApproxBatchSampler( val_idx_to_seq_length, val_sort_sampler, max_length, batch_max_tokens, )
-        val_batch_sampler_kwargs = { 'batch_sampler' : val_batch_sampler, }
+        if val_idx_to_seq_length is not None:
+            val_sort_sampler = SortishSampler( val_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_samples_per_batch=val_n_samples_per_batch, n_replicas=n_replicas)
+            val_batch_sampler = ApproxBatchSampler( val_idx_to_seq_length, val_sort_sampler, max_length, batch_max_tokens, )
+            val_batch_sampler_kwargs = { 'batch_sampler' : val_batch_sampler, }
+        else:
+            val_batch_sampler_kwargs = { 'batch_size' : batch_size, }
         ## Test
-        test_sort_sampler = SortishSampler( test_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_samples_per_batch=test_n_samples_per_batch, n_replicas=n_replicas)
-        test_batch_sampler = ApproxBatchSampler( test_idx_to_seq_length, test_sort_sampler, max_length, batch_max_tokens, )
-        test_batch_sampler_kwargs = { 'batch_sampler' : test_batch_sampler, }
+        if test_idx_to_seq_length is not None:
+            test_sort_sampler = SortishSampler( test_idx_to_seq_length, 1, is_random_shuffle_across_buckets=False, is_random_shuffle_within_buckets=False, n_samples_per_batch=test_n_samples_per_batch, n_replicas=n_replicas)
+            test_batch_sampler = ApproxBatchSampler( test_idx_to_seq_length, test_sort_sampler, max_length, batch_max_tokens, )
+            test_batch_sampler_kwargs = { 'batch_sampler' : test_batch_sampler, }
+        else:
+            test_batch_sampler_kwargs = { 'batch_size' : batch_size, }
     else:
         train_batch_sampler_kwargs = { 'batch_size' : batch_size, }
         val_batch_sampler_kwargs = { 'batch_size' : batch_size, }
@@ -138,9 +164,10 @@ def load_datasets(config: DictConfig, tokenizer: Optional[BaseTokenizer]) -> Dic
         test_dataset = AllTokensFEMRDataset(tokenizer, max_length, path_to_femr_extract, split='test', is_debug=is_debug, seed=seed)
     elif dataset_name == 'MEDSDataset':
         path_to_meds_extract: str = config.data.dataset.path_to_meds_reader_extract
-        train_dataset = MEDSDataset(path_to_meds_extract, split='train', is_debug=is_debug, seed=seed)
-        val_dataset = MEDSDataset(path_to_meds_extract, split='val', is_debug=is_debug, seed=seed)
-        test_dataset = MEDSDataset(path_to_meds_extract, split='test', is_debug=is_debug, seed=seed)
+        reader_num_threads: int = int(getattr(config.data.dataset, 'reader_num_threads', 1))
+        train_dataset = MEDSDataset(path_to_meds_extract, split='train', is_debug=is_debug, seed=seed, reader_num_threads=reader_num_threads)
+        val_dataset = MEDSDataset(path_to_meds_extract, split='val', is_debug=is_debug, seed=seed, reader_num_threads=reader_num_threads)
+        test_dataset = MEDSDataset(path_to_meds_extract, split='test', is_debug=is_debug, seed=seed, reader_num_threads=reader_num_threads)
     else:
         raise ValueError(f"Unknown value for config.data.dataset.name: {dataset_name}")
     

@@ -1,7 +1,6 @@
 import os
 from tqdm import tqdm
 import numpy as np
-import femr.datasets
 from typing import Dict, List, Tuple
 from torch.utils.data import Dataset
 from hf_ehr.config import Event, SPLIT_TRAIN_CUTOFF, SPLIT_VAL_CUTOFF, SPLIT_SEED
@@ -18,13 +17,15 @@ class MEDSDataset(BaseDataset):
                  path_to_meds_reader_extract: str,
                  split: str = 'train',
                  is_debug: bool = False,
-                 seed: int = 1):
+                 seed: int = 1,
+                 reader_num_threads: int = 1):
         import polars as pl
         import meds_reader
         assert os.path.exists(path_to_meds_reader_extract), f"{path_to_meds_reader_extract} is not a valid path"
         assert split in ['train', 'val', 'test'], f"{split} not in ['train', 'val', 'test']"
         self.path_to_meds_reader_extract: str = path_to_meds_reader_extract
-        self.meds_db = meds_reader.SubjectDatabase(path_to_meds_reader_extract, num_threads=1)
+        self.reader_num_threads = int(reader_num_threads)
+        self.meds_db = meds_reader.SubjectDatabase(path_to_meds_reader_extract, num_threads=self.reader_num_threads)
         self.split: str = split
         self.is_debug: bool = is_debug
         self.seed: int = seed
@@ -38,6 +39,8 @@ class MEDSDataset(BaseDataset):
             'is_debug' : is_debug,
             'seed' : seed,
         }
+        if self.reader_num_threads != 1:
+            self.metadata['reader_num_threads'] = self.reader_num_threads
 
         # Pre-calculate canonical splits based on patient ids
         splits = pl.read_parquet(os.path.join(path_to_meds_reader_extract, 'metadata', 'subject_splits.parquet'))
@@ -88,7 +91,7 @@ class MEDSDataset(BaseDataset):
         events: List[Event] = [
             Event(code=e.code,
                   value=getattr(e, "numeric_value", None) or getattr(e, "text_value", None),
-                  unit=e.unit,
+                  unit=getattr(e, "unit", None),
                   start=e.time,
                   end=getattr(e, 'end', None),
                   omop_table=getattr(e, 'omop_table', None),
@@ -109,6 +112,8 @@ class FEMRDataset(BaseDataset):
                  seed: int = 1):
         assert os.path.exists(path_to_femr_extract), f"{path_to_femr_extract} is not a valid path"
         assert split in ['train', 'val', 'test'], f"{split} not in ['train', 'val', 'test']"
+        import femr.datasets
+
         self.path_to_femr_extract: str = path_to_femr_extract
         self.femr_db = femr.datasets.PatientDatabase(path_to_femr_extract)
         self.split: str = split

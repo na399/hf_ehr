@@ -6,7 +6,7 @@ import torch
 import datetime
 import lightning.pytorch as pl
 from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger, MLFlowLogger
-from lightning.pytorch.callbacks import ModelCheckpoint, Callback
+from lightning.pytorch.callbacks import ModelCheckpoint, Callback, EarlyStopping
 from lightning.pytorch.utilities import rank_zero_only
 
 from loguru import logger
@@ -22,7 +22,7 @@ from hf_ehr.models.hyena import HyenaLanguageModel
 from hf_ehr.models.mamba import MambaLanguageModel
 from hf_ehr.models.llama import LlamaLanguageModel
 from hf_ehr.models.t5 import T5LanguageModel
-from hf_ehr.trainer.loaders import load_datasets, load_dataloaders
+from hf_ehr.trainer.loaders import get_eval_splits_for_dataloader, load_datasets, load_dataloaders
 from hf_ehr.config import rewrite_paths_for_carina_from_config
 from hf_ehr.logger.reloggers import WandbRelogger
 import torch.distributed as dist
@@ -65,7 +65,15 @@ def trigger_validation(trainer):
     trainer.training = True
     trainer._logger_connector._first_loop_iter = first_loop_iter
 
-class StartTrainingCheckpoint(ModelCheckpoint):
+class NamedModelCheckpoint(ModelCheckpoint):
+    """ModelCheckpoint with a stable unique state key for Lightning >=2.5."""
+
+    @property
+    def state_key(self) -> str:
+        return f"{self.__class__.__qualname__}{repr({'filename': self.filename})}"
+
+
+class StartTrainingCheckpoint(NamedModelCheckpoint):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -139,6 +147,69 @@ def train_token_metric_func(val: int, last_val: Optional[int], config) -> Tuple[
     last: int = int(last_val // interval)
     return last < current, int(val), current * interval
 
+def resolve_trainer_precision(config: DictConfig) -> str:
+    precision = getattr(config.trainer, 'precision', 'auto_bf16')
+    if precision == 'auto_bf16':
+        return 'bf16-mixed' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else '16-mixed'
+    return precision
+
+
+def resolve_accumulate_grad_batches(config: DictConfig) -> int:
+    accumulate_grad_batches = getattr(config.trainer, 'accumulate_grad_batches', 1)
+    if accumulate_grad_batches != "__PLACEHOLDER__":
+        return int(accumulate_grad_batches)
+
+    target_tokens_per_update = int(getattr(config.trainer, 'target_tokens_per_update', 65_536))
+    max_tokens = int(config.data.dataloader.approx_batch_sampler.max_tokens)
+    if max_tokens <= 0:
+        raise ValueError('data.dataloader.approx_batch_sampler.max_tokens must be > 0')
+    if target_tokens_per_update < max_tokens or target_tokens_per_update % max_tokens != 0:
+        raise ValueError(
+            'trainer.target_tokens_per_update must be greater than or equal to, '
+            'and an even multiple of, data.dataloader.approx_batch_sampler.max_tokens'
+        )
+    return target_tokens_per_update // max_tokens
+
+
+def resolve_early_stopping_callback(config: DictConfig) -> Optional[EarlyStopping]:
+    early_stopping_config = getattr(config.callbacks, "early_stopping", None)
+    if early_stopping_config is None:
+        return None
+
+    patience = getattr(early_stopping_config, "patience", None)
+    if patience in [None, "None", "null"]:
+        return None
+
+    monitor = getattr(early_stopping_config, "monitor", "val/loss")
+    mode = getattr(early_stopping_config, "metric_mode", getattr(early_stopping_config, "mode", "min"))
+    min_delta = float(getattr(early_stopping_config, "min_delta", 0.0))
+    return EarlyStopping(
+        monitor=monitor,
+        mode=mode,
+        patience=int(patience),
+        min_delta=min_delta,
+        verbose=True,
+    )
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() not in {'false', '0', 'none', 'null', 'no'}
+    return bool(value)
+
+
+def _is_enabled(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.lower() not in {'none', 'null', 'false'}
+    return True
+
+
 @hydra.main(version_base=None, config_path='../configs/', config_name="config")
 def main(config: DictConfig) -> None:
     # Rewrite paths for /local-scratch on certain partitions
@@ -146,16 +217,12 @@ def main(config: DictConfig) -> None:
         config = rewrite_paths_for_carina_from_config(config)
 
     if 'trainer' in config and 'accumulate_grad_batches' in config.trainer:
-        if config.trainer.accumulate_grad_batches == "__PLACEHOLDER__":
-            try:
-                # Force gradient accumulation to keep 65536 tokens per accumulation step
-                assert config.data.dataloader.approx_batch_sampler.max_tokens <= 65536, "config.data.dataloader.approx_batch_sampler.max_tokens must be <= 65536"
-                assert 65536 % config.data.dataloader.approx_batch_sampler.max_tokens == 0, "config.data.dataloader.approx_batch_sampler.max_tokens must be a factor of 65536"
-                config.trainer.accumulate_grad_batches = 65536 // config.data.dataloader.approx_batch_sampler.max_tokens
-                logger.info(f"Manually setting accumulate_grad_batches: {config.trainer.accumulate_grad_batches}")
-            except (KeyError, ZeroDivisionError) as e:
-                logger.error(f"Failed to calculate accumulate_grad_batches: {e}")
-                return
+        try:
+            config.trainer.accumulate_grad_batches = resolve_accumulate_grad_batches(config)
+            logger.info(f"Setting accumulate_grad_batches: {config.trainer.accumulate_grad_batches}")
+        except (KeyError, ZeroDivisionError, ValueError) as e:
+            logger.error(f"Failed to calculate accumulate_grad_batches: {e}")
+            return
 
     # Load config
     print(config)
@@ -166,6 +233,8 @@ def main(config: DictConfig) -> None:
     model_name: str = config.model.name
     path_to_tokenizer_config: str = config.data.tokenizer.path_to_config
     tokenizer_metadata: Dict[str, Any] = getattr(config.data.tokenizer, 'metadata', {})
+    tokenizer_cache_dir: Optional[str] = getattr(config.data.tokenizer, 'cache_dir', None)
+    tokenizer_kwargs: Dict[str, Any] = {'path_to_tokenizer_cache_dir': tokenizer_cache_dir} if tokenizer_cache_dir else {}
     seed: int = config.main.seed
     is_force_restart: bool = config.main.is_force_restart
 
@@ -309,20 +378,19 @@ def main(config: DictConfig) -> None:
         # DescEmb
         metadata = OmegaConf.to_container(tokenizer_metadata, resolve=True, enum_to_str=True)
         logger.info(f"Loading DescTokenizer: `{config.data.tokenizer.path_to_config}` using base tokenizer `{config.data.tokenizer.metadata.desc_emb_tokenizer}`")
-        tokenizer = DescTokenizer( config.data.tokenizer.path_to_config, metadata=metadata)
+        tokenizer = DescTokenizer( config.data.tokenizer.path_to_config, metadata=metadata, **tokenizer_kwargs)
     elif config.data.tokenizer.name == 'CLMBRTokenizer':
         # CLMBR
         logger.info(f"Loading CLMBRTokenizer: `{config.data.tokenizer.path_to_config}`")
-        tokenizer = CLMBRTokenizer( config.data.tokenizer.path_to_config )
+        tokenizer = CLMBRTokenizer( config.data.tokenizer.path_to_config, **tokenizer_kwargs )
     elif config.data.tokenizer.name == 'CookbookTokenizer':
         # Custom cookbook
         logger.info(f"Loading CookbookTokenizer: `{config.data.tokenizer.path_to_config}`")
-        tokenizer = CookbookTokenizer( config.data.tokenizer.path_to_config, metadata=tokenizer_metadata, )
+        tokenizer = CookbookTokenizer( config.data.tokenizer.path_to_config, metadata=tokenizer_metadata, **tokenizer_kwargs, )
     elif config.data.tokenizer.name == 'CEHRTokenizer':
         # CLMBR
         logger.info(f"Loading CEHRTokenizer: `{config.data.tokenizer.path_to_config}`")
-        tokenizer = CEHRTokenizer( config.data.tokenizer.path_to_config )
-        tokenizer = CEHRTokenizer( config.data.tokenizer.path_to_config, metadata=tokenizer_metadata, )
+        tokenizer = CEHRTokenizer( config.data.tokenizer.path_to_config, metadata=tokenizer_metadata, **tokenizer_kwargs, )
     tokenizer.save() # write to file to save this exact tokenizer for reproducibility
     logger.info(f"Vocab size: all={tokenizer.vocab_size} | non_special_tokens={len(tokenizer.non_special_tokens)} | special_tokens={len(tokenizer.special_tokens)}")
 
@@ -359,53 +427,72 @@ def main(config: DictConfig) -> None:
 
     # Callbacks
     callbacks: List = []
-    callbacks += [ 
-        # Save top-K checkpoints based on `val/loss`; overwrites old models
-        ModelCheckpoint(
-            dirpath=path_to_ckpt_dir,
-            filename='{epoch}-{step}-val_loss',
-            save_top_k=config.callbacks.model_checkpointing.save_top_k_val_loss,
-            every_n_train_steps=config.callbacks.model_checkpointing.save_most_recent_every_n_train_steps,
-            save_weights_only=False, # If False, then save optimizer + scheduler states as well
-            monitor='val/loss',
-            mode='min',
-            verbose=True,
-        ),
-        # Save most recent `n = save_most_recent_k` checkpoints; overwrites old models
-        ModelCheckpoint(
-            dirpath=path_to_ckpt_dir,
-            filename='{epoch}-{step}-recent',
-            save_top_k=config.callbacks.model_checkpointing.save_most_recent_k,
-            every_n_train_steps=config.callbacks.model_checkpointing.save_most_recent_every_n_train_steps,
-            save_last=True, # When True, saves an exact copy of the checkpoint to a file last.ckpt whenever a checkpoint file gets saved.
-            save_weights_only=False, # If False, then save optimizer + scheduler states as well
-            verbose=True,
-        ),
-        # Save checkpoint at end of every epoch
-        ModelCheckpoint(
-            dirpath=path_to_ckpt_dir,
-            filename='{epoch}-epoch-persist',
-            save_top_k=-1,
-            every_n_epochs=1,
-            save_weights_only=False, # If False, then save optimizer + scheduler states as well
-            verbose=True,
-        ),
-        # Save checkpoint every `every_n_train_steps` steps; persists all models
-        ModelCheckpoint(
-            dirpath=path_to_ckpt_dir,
-            filename='{epoch}-{step}-persist',
-            save_top_k=-1,
-            every_n_train_steps=config.callbacks.model_checkpointing.every_n_train_steps,
-            save_weights_only=False, # If False, then save optimizer + scheduler states as well
-            verbose=True,
-        ),
-        StartTrainingCheckpoint(
-            dirpath=path_to_ckpt_dir,
-            filename='first',
-            save_top_k=1,
-            verbose=True,
-        )
-    ]
+    early_stopping_callback = resolve_early_stopping_callback(config)
+    if early_stopping_callback is not None:
+        callbacks += [early_stopping_callback]
+    checkpoint_config = config.callbacks.model_checkpointing
+    save_weights_only = _as_bool(getattr(checkpoint_config, 'save_weights_only', False))
+    if getattr(checkpoint_config, 'save_top_k_val_loss', 1) != 0:
+        callbacks += [
+            # Save top-K checkpoints based on `val/loss`; overwrites old models
+            NamedModelCheckpoint(
+                dirpath=path_to_ckpt_dir,
+                filename='{epoch}-{step}-val_loss',
+                save_top_k=checkpoint_config.save_top_k_val_loss,
+                every_n_train_steps=checkpoint_config.save_most_recent_every_n_train_steps,
+                save_weights_only=save_weights_only,
+                monitor='val/loss',
+                mode='min',
+                verbose=True,
+            ),
+        ]
+    if getattr(checkpoint_config, 'save_most_recent_k', 1) != 0 or _as_bool(getattr(checkpoint_config, 'save_last_checkpoint', True), True):
+        callbacks += [
+            # Save most recent `n = save_most_recent_k` checkpoints and optionally `last.ckpt` for resume.
+            NamedModelCheckpoint(
+                dirpath=path_to_ckpt_dir,
+                filename='{epoch}-{step}-recent',
+                save_top_k=checkpoint_config.save_most_recent_k,
+                every_n_train_steps=checkpoint_config.save_most_recent_every_n_train_steps,
+                save_last=_as_bool(getattr(checkpoint_config, 'save_last_checkpoint', True), True),
+                save_weights_only=save_weights_only,
+                verbose=True,
+            ),
+        ]
+    if _as_bool(getattr(checkpoint_config, 'save_epoch_checkpoint', True), True):
+        callbacks += [
+            # Save checkpoint at end of every epoch
+            NamedModelCheckpoint(
+                dirpath=path_to_ckpt_dir,
+                filename='{epoch}-epoch-persist',
+                save_top_k=-1,
+                every_n_epochs=1,
+                save_weights_only=save_weights_only,
+                verbose=True,
+            ),
+        ]
+    if _as_bool(getattr(checkpoint_config, 'save_step_checkpoint', True), True) and _is_enabled(getattr(checkpoint_config, 'every_n_train_steps', None)):
+        callbacks += [
+            # Save checkpoint every `every_n_train_steps` steps; persists all models
+            NamedModelCheckpoint(
+                dirpath=path_to_ckpt_dir,
+                filename='{epoch}-{step}-persist',
+                save_top_k=-1,
+                every_n_train_steps=checkpoint_config.every_n_train_steps,
+                save_weights_only=save_weights_only,
+                verbose=True,
+            ),
+        ]
+    if _as_bool(getattr(checkpoint_config, 'save_start_checkpoint', True), True):
+        callbacks += [
+            StartTrainingCheckpoint(
+                dirpath=path_to_ckpt_dir,
+                filename='first',
+                save_top_k=1,
+                save_weights_only=save_weights_only,
+                verbose=True,
+            )
+        ]
     if getattr(config.callbacks.model_checkpointing, 'every_n_train_nonPAD_tokens', None) not in [None, "None"]:
         # Save checkpoint every `every_n_train_nonPAD_tokens` steps; persists all models
         logger.critical("Adding MetricBasedCheckpoint for non-PAD tokens...")
@@ -439,7 +526,7 @@ def main(config: DictConfig) -> None:
         limit_train_batches=config.trainer.limit_train_batches,
         limit_val_batches=config.trainer.limit_val_batches,
         log_every_n_steps=config.logging.log_every_n_steps,
-        precision="bf16" if torch.cuda.is_bf16_supported() else 16,
+        precision=resolve_trainer_precision(config),
         val_check_interval=config.trainer.val_check_interval, # check val set every 10% of training batches (useful for large training datasets, rather than wait for full epoch to finish)
         check_val_every_n_epoch=config.trainer.check_val_every_n_epoch, # log val PPL at end of every epoch
         max_epochs=config.trainer.max_epochs,

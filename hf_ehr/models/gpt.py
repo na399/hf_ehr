@@ -122,6 +122,12 @@ class GPTLanguageModel(BaseModel):
             self.model = AutoModelForCausalLM.from_pretrained(model_config, **kwargs)
         else:
             self.model = AutoModelForCausalLM.from_config(model_config, **kwargs)
+
+        if getattr(config.model, 'is_gradient_checkpointing', False):
+            self.model.config.use_cache = False
+            self.model.gradient_checkpointing_enable()
+            if hasattr(self.model, 'enable_input_require_grads'):
+                self.model.enable_input_require_grads()
             
         # ROPE
         self.is_use_rope = getattr(config.data.dataloader, 'is_use_rope', False) # added to replace default attention layers with custom RoPEGPT2Attention layers
