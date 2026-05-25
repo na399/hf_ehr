@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Set, Tuple, Union, Any, TypedDict
 import torch
 from transformers import PreTrainedTokenizer, AutoTokenizer
 from hf_ehr.config import Event, TokenizerConfigEntry, load_tokenizer_config_from_path, save_tokenizer_config_to_path
+from hf_ehr.tokenizers.code_normalization import clmbr_meds_code_candidates, clmbr_meds_raw_variants
 import os
 from tqdm import tqdm
 from omegaconf import OmegaConf, DictConfig
@@ -409,12 +410,17 @@ class BaseCodeTokenizer(BaseTokenizer):
         pids = [int(pid[0]) if hasattr(pid, '__len__') and not isinstance(pid, (str, bytes)) else int(pid) for pid in dataset.get_pids()]
         if not pids:
             return []
-        vocab_codes = [entry.code for entry in self.tokenizer_config]
+        vocab_codes = {entry.code for entry in self.tokenizer_config}
+        meds_vocab_codes = {
+            variant
+            for code in vocab_codes
+            for variant in clmbr_meds_raw_variants(code)
+        }
         counts = (
             pl.scan_parquet(os.path.join(path_to_split_dir, '*.parquet'))
             .select(['subject_id', 'code'])
             .filter(pl.col('subject_id').is_in(pids))
-            .filter(pl.col('code').is_in(vocab_codes))
+            .filter(pl.col('code').is_in(list(vocab_codes | meds_vocab_codes)))
             .group_by('subject_id')
             .len()
             .collect()
@@ -723,6 +729,7 @@ class CLMBRTokenizer(BaseCodeTokenizer):
         # Set metadata        
         self.metadata: Dict[str, Any] = {}
         self.metadata['cls'] = 'CLMBRTokenizer'
+        self.metadata['meds_code_normalization'] = 'double_slash_to_single_slash_v1'
 
         # Preprocess tokenizer config for quick access
         self.code_2_token = {} # [key] = token; [val] = { 'type' : str, 'tokenization' : dict, 'token' : str }
@@ -742,13 +749,18 @@ class CLMBRTokenizer(BaseCodeTokenizer):
         super().__init__()
 
     def convert_event_to_token(self, e: Event, **kwargs) -> Optional[str]:
+        code = None
+        for candidate in clmbr_meds_code_candidates(e.code):
+            if candidate in self.code_2_token:
+                code = candidate
+                break
         # If code isn't in CLMBR vocab => ignore
-        if e.code not in self.code_2_token:
+        if code is None:
             return None
         
         # If numerical code...
         if (
-            'numerical_range' in self.code_2_token[e.code] # `numerical_range` is a valid type for this code
+            'numerical_range' in self.code_2_token[code] # `numerical_range` is a valid type for this code
             and e.value is not None # `value` is not None
             and ( # `value` is numeric
                 isinstance(e.value, float)
@@ -756,9 +768,9 @@ class CLMBRTokenizer(BaseCodeTokenizer):
             )
         ):
             # NOTE: CLMBR ignores units
-            for token_range in self.code_2_token[e.code]['numerical_range']:
-                assert 'token' in token_range, f"ERROR - Missing 'token' for code={e.code},type=numerical_range in self.code_2_token: {self.code_2_token[e.code]['numerical_range']}"
-                assert 'tokenization' in token_range, f"ERROR - Missing 'tokenization' for code={e.code},type=numerical_range in self.code_2_token: {self.code_2_token[e.code]['numerical_range']}"
+            for token_range in self.code_2_token[code]['numerical_range']:
+                assert 'token' in token_range, f"ERROR - Missing 'token' for code={code},type=numerical_range in self.code_2_token: {self.code_2_token[code]['numerical_range']}"
+                assert 'tokenization' in token_range, f"ERROR - Missing 'tokenization' for code={code},type=numerical_range in self.code_2_token: {self.code_2_token[code]['numerical_range']}"
                 token: str = token_range['token']
                 range_start: float = token_range['tokenization']['range_start']
                 range_end: float = token_range['tokenization']['range_end']
@@ -768,16 +780,16 @@ class CLMBRTokenizer(BaseCodeTokenizer):
 
         # If textual code...
         if (
-            'categorical' in self.code_2_token[e.code] # `categorical` is a valid type for this code
+            'categorical' in self.code_2_token[code] # `categorical` is a valid type for this code
             and e.value is not None # `value` is not None
             and e.value != '' # `value` is not blank
             and ( # `value` is textual
                 isinstance(e.value, str)
             )
         ):
-            for categorical_value in self.code_2_token[e.code]['categorical']:
-                assert 'token' in categorical_value, f"ERROR - Missing 'token' for code={e.code},type=categorical in self.code_2_token: {self.code_2_token[e.code]['categorical']}"
-                assert 'tokenization' in categorical_value, f"ERROR - Missing 'tokenization' for code={e.code},type=categorical in self.code_2_token: {self.code_2_token[e.code]['categorical']}"
+            for categorical_value in self.code_2_token[code]['categorical']:
+                assert 'token' in categorical_value, f"ERROR - Missing 'token' for code={code},type=categorical in self.code_2_token: {self.code_2_token[code]['categorical']}"
+                assert 'tokenization' in categorical_value, f"ERROR - Missing 'tokenization' for code={code},type=categorical in self.code_2_token: {self.code_2_token[code]['categorical']}"
                 if e.value in categorical_value['tokenization']['categories']:
                     token: str = categorical_value['token']
                     return token
@@ -785,9 +797,9 @@ class CLMBRTokenizer(BaseCodeTokenizer):
 
         # If just vanilla code...
         if (
-            'code' in self.code_2_token[e.code] # `code` is a valid type for this code
+            'code' in self.code_2_token[code] # `code` is a valid type for this code
         ):
-            token: str = self.code_2_token[e.code]['code'][0]['token']
+            token: str = self.code_2_token[code]['code'][0]['token']
             return token
 
         return None
@@ -1199,7 +1211,9 @@ def collate_femr_timelines(batch: List[Tuple[int, List[Event]]],
         tokens["input_ids"], tokens["labels"] = torch_mask_tokens(tokenizer, tokens["input_ids"], mlm_prob)
     else:
         # Causal LM
-        tokens['labels'] = tokens['input_ids']
+        tokens['labels'] = tokens['input_ids'].clone()
+        if 'attention_mask' in tokens:
+            tokens['labels'][tokens['attention_mask'] == 0] = -100
 
     return {
         'patient_ids' : [ x[0] for x in batch ],
@@ -1297,4 +1311,3 @@ if __name__ == '__main__':
         print(tokens)
 
         exit()
-

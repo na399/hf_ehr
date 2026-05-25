@@ -11,20 +11,28 @@ python3 ehrshot.py \
 
 import argparse
 import collections
+import hashlib
 import os
 import pickle
 import numpy as np
 import torch
 import json
-import femr.datasets
-from jaxtyping import Float
 import shutil
 from typing import List, Dict, Tuple, Optional, Any, Set, Union
 from tqdm import tqdm
 from loguru import logger
-from femr.labelers import LabeledPatients, load_labeled_patients
+from hf_ehr.eval.ehrshot_features import select_patient_representation
 from hf_ehr.utils import load_config_from_path, load_tokenizer_from_path, load_model_from_path
 from hf_ehr.config import Event
+
+try:
+    from jaxtyping import Float
+except ModuleNotFoundError:
+    class _FloatFallback:
+        def __getitem__(self, _: Any) -> Any:
+            return Any
+
+    Float = _FloatFallback()
 
 class CookbookModelWithClassificationHead(torch.nn.Module):
     def __init__(self, model: torch.nn.Module, aggregation_strat: str, n_classes: int):
@@ -99,12 +107,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--path_to_labels_dir", required=True, type=str, help="Path to directory containing saved labels")
     parser.add_argument("--path_to_features_dir", required=True, type=str, help="Path to directory where features will be saved")
     parser.add_argument("--path_to_tokenized_timelines_dir", required=True, type=str, help="Path to directory where tokenized timelines will be saved")
+    parser.add_argument("--database_backend", choices=["femr", "meds_reader"], default="femr", help="Backend used by --path_to_database")
     parser.add_argument("--path_to_model", type=str, help="Path to model .ckpt")
     parser.add_argument("--model_name", type=str, default=None, help="If specified, replace folder name with this as the model's name")
-    parser.add_argument("--embed_strat", type=str, help="Strategy used for condensing a chunk of a timeline into a single embedding. Options: 'last' (only take last token), 'mean' (avg all tokens).")
+    parser.add_argument("--embed_strat", type=str, help="Strategy used for condensing a chunk of a timeline into a single embedding. Options: 'last' (only take last token), 'last_nonpad' (last non-padding token), 'mean' (avg all tokens).")
     parser.add_argument("--chunk_strat", type=str, help="Strategy used for condensing a timeline longer than context window C. Options: 'last' (only take last chunk), 'mean' (avg all chunks together).")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run inference on")
+    parser.add_argument("--overwrite_existing_model_dir", action="store_true", help="Replace an existing copied-model directory for this EHRSHOT signature.")
+    parser.add_argument("--add_special_tokens", action="store_true", help="Use the tokenizer's training-time special tokens during feature extraction.")
+    parser.add_argument("--padding_side", choices=["left", "right"], default="left", help="Manual padding side for cached tokenized timelines.")
     # For chunking
     parser.add_argument("--patient_idx_start", type=int, default=None, help="If specified, only process patients with idx >= this value (INCLUSIVE)")
     parser.add_argument("--patient_idx_end", type=int, default=None, help="If specified, only process patients with idx < this value (EXCLUSIVE)")
@@ -115,8 +127,45 @@ def get_ckpt_name(path_to_ckpt: str) -> str:
     file_name, _ = os.path.splitext(base_name)
     return file_name
 
+def get_unique_path(path: str) -> str:
+    if not os.path.exists(path):
+        return path
+    idx = 1
+    while True:
+        candidate = f"{path}__rerun{idx}"
+        if not os.path.exists(candidate):
+            return candidate
+        idx += 1
+
+def get_file_digest(path: str, n_hex: int = 12) -> str:
+    digest = hashlib.blake2b(digest_size=16)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:n_hex]
+
+def convert_event(raw_event: Any) -> Event:
+    if hasattr(raw_event, "start"):
+        return Event(
+            code=raw_event.code,
+            value=raw_event.value,
+            unit=raw_event.unit,
+            start=raw_event.start,
+            end=raw_event.end,
+            omop_table=raw_event.omop_table,
+        )
+    return Event(
+        code=raw_event.code,
+        value=getattr(raw_event, "numeric_value", None) or getattr(raw_event, "text_value", None),
+        unit=getattr(raw_event, "unit", None),
+        start=getattr(raw_event, "time", None),
+        end=getattr(raw_event, "end", None),
+        omop_table=getattr(raw_event, "omop_table", None),
+    )
+
 def process_in_batches(run_name, database, patient_ids, label_times, tokenizer, max_length, output_dir,
-                      batch_size=1000, pad_token_id=0, chunk_strat='last') -> Dict[str, Any]:
+                      batch_size=1000, pad_token_id=0, chunk_strat='last',
+                      add_special_tokens=False, padding_side='left') -> Dict[str, Any]:
     """
     Process patient events and create tokenized timelines in batches, saving each batch separately.
     Returns the list of batch files and metadata instead of loading everything into memory.
@@ -165,10 +214,7 @@ def process_in_batches(run_name, database, patient_ids, label_times, tokenizer, 
         for pid in tqdm(batch_patient_ids, desc='Caching patient events', total=total_batch):
             if pid not in batch_patient_id_2_events:
                 for e in database[pid].events:
-                    batch_patient_id_2_events[pid].append(
-                        Event(code=e.code, value=e.value, unit=e.unit, 
-                              start=e.start, end=e.end, omop_table=e.omop_table)
-                    )
+                    batch_patient_id_2_events[pid].append(convert_event(e))
         
         # Process each patient in the current batch
         batch_tokenized_timelines = []
@@ -176,11 +222,11 @@ def process_in_batches(run_name, database, patient_ids, label_times, tokenizer, 
             # Create patient timeline
             valid_events = [
                 e for e in batch_patient_id_2_events[pid]
-                if e.start <= l_time  # Ignore events after label time
+                if e.start is None or e.start <= l_time  # Ignore events after label time
             ]
             
             # Tokenize timeline
-            timeline = tokenizer(valid_events, add_special_tokens=False)['input_ids'][0]
+            timeline = tokenizer(valid_events, add_special_tokens=add_special_tokens)['input_ids'][0]
             
             # Apply chunking strategy
             if chunk_strat == 'last':
@@ -189,7 +235,13 @@ def process_in_batches(run_name, database, patient_ids, label_times, tokenizer, 
                 raise ValueError(f"Chunk strategy `{chunk_strat}` not supported.")
             
             # PAD timeline to max_length
-            padded_timeline = [pad_token_id] * (max_length - len(timeline)) + timeline  # left padding
+            pad_len = max_length - len(timeline)
+            if padding_side == 'left':
+                padded_timeline = [pad_token_id] * pad_len + timeline
+            elif padding_side == 'right':
+                padded_timeline = timeline + [pad_token_id] * pad_len
+            else:
+                raise ValueError(f"Padding side `{padding_side}` not supported.")
             batch_tokenized_timelines.append(padded_timeline)
         
         # Convert batch results to numpy array
@@ -229,7 +281,6 @@ def process_in_batches(run_name, database, patient_ids, label_times, tokenizer, 
     
     return batch_metadata
 
-
 def compute_feature_matrix(
     batch_metadata,
     config,
@@ -248,7 +299,9 @@ def compute_feature_matrix(
 
             for batch_start in tqdm(range(0, len(tokenized_timelines), batch_size), desc=f"Generating patient representations: {id}/{len(batch_metadata['batches'])}", total=len(tokenized_timelines) // batch_size):
                 batch_end = min(len(tokenized_timelines), batch_start + batch_size)
-                pids = patient_ids[batch_start:batch_end]
+                global_batch_start = batch_dict['start_idx'] + batch_start
+                global_batch_end = batch_dict['start_idx'] + batch_end
+                pids = patient_ids[global_batch_start:global_batch_end]
                 batch_tokenized_timelines: List[List[int]] = tokenized_timelines[batch_start:batch_start + batch_size]
 
                 ########################
@@ -275,16 +328,7 @@ def compute_feature_matrix(
                 # Save generated reprs
                 ########################
                 for idx in range(len(pids)):
-                    if embed_strat == 'last':
-                        try:
-                            patient_rep = hidden_states[idx, -1, :].cpu().numpy()
-                        except Exception as e:
-                            breakpoint()
-                    elif embed_strat == 'mean':
-                        mask = input_ids[idx] != pad_token_id
-                        patient_rep = hidden_states[idx, mask].mean(dim=0).cpu().numpy()
-                    else:
-                        raise ValueError(f"Embedding strategy `{embed_strat}` not supported.")
+                    patient_rep = select_patient_representation(hidden_states, input_ids, pad_token_id, idx, embed_strat)
                     feature_matrix.append(patient_rep)
     return feature_matrix
 
@@ -305,6 +349,7 @@ def main():
     EMBED_STRAT: str = args.embed_strat
     CHUNK_STRAT: str = args.chunk_strat
     PATH_TO_PATIENT_DATABASE = args.path_to_database
+    DATABASE_BACKEND = args.database_backend
     PATH_TO_LABELS_DIR: str = args.path_to_labels_dir
     PATH_TO_FEATURES_DIR: str = args.path_to_features_dir
     PATH_TO_TOKENIZED_TIMELINES_DIR: str = args.path_to_tokenized_timelines_dir
@@ -314,6 +359,8 @@ def main():
     CKPT: str = get_ckpt_name(PATH_TO_MODEL)
     batch_size: int = args.batch_size if args.batch_size not in [None, ''] else 16
     device: str = args.device
+    add_special_tokens: bool = args.add_special_tokens
+    padding_side: str = args.padding_side
     patient_idx_start: Optional[int] = args.patient_idx_start
     patient_idx_end: Optional[int] = args.patient_idx_end
     model_signature: str = f'{MODEL}_{CKPT}_chunk:{CHUNK_STRAT}_embed:{EMBED_STRAT}'
@@ -324,10 +371,18 @@ def main():
     logger.critical(f"Saving results to `{PATH_TO_OUTPUT_FILE}`")
 
     logger.info(f"Loading LabeledPatients from `{PATH_TO_LABELED_PATIENTS}`")
-    labeled_patients: LabeledPatients = load_labeled_patients(PATH_TO_LABELED_PATIENTS)
+    from femr.labelers import load_labeled_patients
+
+    labeled_patients: Any = load_labeled_patients(PATH_TO_LABELED_PATIENTS)
     
     logger.info(f"Loading PatientDatabase from `{PATH_TO_PATIENT_DATABASE}`")
-    database = femr.datasets.PatientDatabase(PATH_TO_PATIENT_DATABASE, read_all=True)
+    if DATABASE_BACKEND == "femr":
+        import femr.datasets
+
+        database = femr.datasets.PatientDatabase(PATH_TO_PATIENT_DATABASE, read_all=True)
+    else:
+        import meds_reader
+        database = meds_reader.SubjectDatabase(PATH_TO_PATIENT_DATABASE, num_threads=1)
     logger.info(f"Loading Config from `{PATH_TO_MODEL}`")
     config = load_config_from_path(PATH_TO_MODEL)
     logger.info(config)
@@ -368,7 +423,8 @@ def main():
     
     
     # Cache tokenized timelines for this sequence length
-    run_name = f"chunk_strat={CHUNK_STRAT},max_length={max_length}_{config.data.tokenizer.name}" + (f'--start_idx={patient_idx_start}' if patient_idx_start else '') + (f'--end_idx={patient_idx_end}' if patient_idx_end else '') + "_tokenized_timelines"
+    label_cache_key = f"{os.path.basename(os.path.abspath(PATH_TO_LABELS_DIR))}-{get_file_digest(PATH_TO_LABELED_PATIENTS)}"
+    run_name = f"labels={label_cache_key},special={int(add_special_tokens)},padding={padding_side},chunk_strat={CHUNK_STRAT},max_length={max_length}_{config.data.tokenizer.name}" + (f'--start_idx={patient_idx_start}' if patient_idx_start else '') + (f'--end_idx={patient_idx_end}' if patient_idx_end else '') + "_tokenized_timelines"
     path_to_tokenized_timelines_metadata_file: str = os.path.join(PATH_TO_TOKENIZED_TIMELINES_DIR, f'{run_name}.json')
     if os.path.exists(path_to_tokenized_timelines_metadata_file):
         # Cache hit
@@ -385,7 +441,10 @@ def main():
             output_dir=PATH_TO_TOKENIZED_TIMELINES_DIR,
             run_name=run_name,
             pad_token_id=pad_token_id,
-            batch_size=8000
+            batch_size=8000,
+            chunk_strat=CHUNK_STRAT,
+            add_special_tokens=add_special_tokens,
+            padding_side=padding_side,
         )
     
     feature_matrix = compute_feature_matrix(
@@ -412,7 +471,11 @@ def main():
     path_to_model_ehrshot_dir = os.path.abspath(os.path.join(PATH_TO_FEATURES_DIR, "../models/", os.path.basename(PATH_TO_OUTPUT_FILE)))
     logger.critical(f"Copying model ckpt from `{PATH_TO_MODEL}` to `{path_to_model_ehrshot_dir}`")
     if os.path.exists(path_to_model_ehrshot_dir):
-        shutil.rmtree(path_to_model_ehrshot_dir)
+        if args.overwrite_existing_model_dir:
+            shutil.rmtree(path_to_model_ehrshot_dir)
+        else:
+            path_to_model_ehrshot_dir = get_unique_path(path_to_model_ehrshot_dir)
+            logger.warning(f"Model copy directory exists; writing this rerun to `{path_to_model_ehrshot_dir}`")
     os.makedirs(path_to_model_ehrshot_dir, exist_ok=True)
     shutil.copy(PATH_TO_MODEL, path_to_model_ehrshot_dir)
     ## Copy logging files over

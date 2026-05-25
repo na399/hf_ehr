@@ -173,3 +173,5 @@ cython_debug/
 
 runs/
 temp/
+.longleaf/
+*.ckpt
